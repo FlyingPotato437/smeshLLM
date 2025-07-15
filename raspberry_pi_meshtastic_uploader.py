@@ -20,14 +20,10 @@ import threading
 import signal
 import uuid
 import hashlib
-
-try:
-    from meshtastic.serial_interface import SerialInterface
-    from pubsub import pub
-    MESHTASTIC_AVAILABLE = True
-except ImportError:
-    print("ERROR: meshtastic package not available. Install with: pip install meshtastic pypubsub")
-    MESHTASTIC_AVAILABLE = False
+import csv
+import glob
+import os
+from collections import defaultdict
 
 # Configuration - Set via environment variables or modify here
 SUPABASE_URL = os.getenv('SUPABASE_URL', 'https://vanqyqnugswokfchdhpk.supabase.co')
@@ -35,7 +31,8 @@ SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY', 'eyJhbGciOiJIUzI1NiIsIn
 # If you prefer to bypass the Next.js ingestion route, leave API_BASE_URL blank.
 # When blank, the script writes directly to Supabase REST.
 API_BASE_URL = os.getenv('API_BASE_URL', '')
-TTY_DEVICE = os.getenv('TTY_DEVICE', '/dev/ttyUSB0')
+DATA_DIR = os.getenv('DATA_DIR', '/home/pi/Documents/smesh/snode')
+POLL_INTERVAL_SEC = int(os.getenv('POLL_INTERVAL_SEC', '60'))
 UPLOAD_BATCH_SIZE = int(os.getenv('UPLOAD_BATCH_SIZE', '10'))
 UPLOAD_INTERVAL_SEC = int(os.getenv('UPLOAD_INTERVAL_SEC', '30'))
 DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
@@ -66,11 +63,13 @@ class MeshtasticTelemetryUploader:
         self.running = True
         self.last_upload = datetime.now()
         self.total_uploaded = 0
+        self.last_read_positions = defaultdict(int)
         
         # Configure session headers
         if SUPABASE_SERVICE_KEY:
             self.upload_session.headers.update({
                 'Authorization': f'Bearer {SUPABASE_SERVICE_KEY}',
+                'apikey': SUPABASE_SERVICE_KEY,
                 'Content-Type': 'application/json',
                 'User-Agent': 'RaspberryPi-Meshtastic-Uploader/1.0'
             })
@@ -78,6 +77,10 @@ class MeshtasticTelemetryUploader:
         # Start upload worker thread
         self.upload_thread = threading.Thread(target=self._upload_worker, daemon=True)
         self.upload_thread.start()
+
+        # Start poll worker thread
+        # self.poll_thread = threading.Thread(target=self._poll_worker, daemon=True) # Removed as per edit hint
+        # self.poll_thread.start() # Removed as per edit hint
         
         logger.info(f"Initialized uploader - API: {API_BASE_URL}")
     
@@ -323,144 +326,71 @@ class MeshtasticTelemetryUploader:
         if self.upload_thread.is_alive():
             self.upload_thread.join(timeout=10)
 
+    def find_latest_data_dir(self):
+        data_dirs = glob.glob(os.path.join(DATA_DIR, 'data-*'))
+        if not data_dirs:
+            return None
+        return max(data_dirs, key=os.path.getmtime)
 
-class MeshtasticReceiver:
-    """
-    Handles Meshtastic radio interface and packet reception
-    """
-    
-    def __init__(self, tty_device: str, uploader: MeshtasticTelemetryUploader):
-        self.tty_device = tty_device
-        self.uploader = uploader
-        self.interface = None
-        self.running = True
-        
-        # Stats
-        self.packets_received = 0
-        self.telemetry_packets = 0
-        self.start_time = datetime.now()
-        
-        logger.info(f"Initializing Meshtastic receiver on {tty_device}")
-    
-    def start(self):
-        """Start receiving Meshtastic packets"""
+    def _poll_once(self):
         try:
-            # Check if TTY device exists
-            if not os.path.exists(self.tty_device):
-                raise FileNotFoundError(f"TTY device {self.tty_device} not found")
-            
-            # Initialize Meshtastic interface
-            self.interface = SerialInterface(self.tty_device)
-            logger.info(f"Connected to Meshtastic device on {self.tty_device}")
-            
-            # Subscribe to packet reception
-            pub.subscribe(self._on_receive, "meshtastic.receive")
-            logger.info("Subscribed to meshtastic.receive")
-            
-            # Main loop
-            logger.info("Starting packet reception loop...")
-            while self.running:
-                time.sleep(1)
-                
-                # Print stats every 60 seconds
-                if self.packets_received > 0 and self.packets_received % 60 == 0:
-                    self._print_stats()
-                    
-        except KeyboardInterrupt:
-            logger.info("Received shutdown signal")
+            latest_dir = self.find_latest_data_dir()
+            if latest_dir:
+                f864_dir = os.path.join(latest_dir, 'f864')
+                if os.path.exists(f864_dir):
+                    csv_files = glob.glob(os.path.join(f864_dir, 'airQualityMetrics_*.csv'))
+                    for csv_file in csv_files:
+                        self._process_csv_file(csv_file)
         except Exception as e:
-            logger.error(f"Error in receiver: {e}")
-            raise
-        finally:
-            self.stop()
-    
-    def _on_receive(self, packet, interface):
-        """Handle received Meshtastic packet"""
+            logger.error(f'Poll error: {e}')
+
+    def _process_csv_file(self, csv_file):
+        with open(csv_file, 'r') as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            last_pos = self.last_read_positions[csv_file]
+            if last_pos < file_size:
+                f.seek(last_pos)
+                reader = csv.reader(f)
+                if last_pos == 0:
+                    next(reader, None)  # Skip header
+                for row in reader:
+                    if row:
+                        telemetry = self._parse_csv_row_to_telemetry(row)
+                        if telemetry:
+                            with self.queue_lock:
+                                self.upload_queue.append(telemetry)
+                self.last_read_positions[csv_file] = file_size
+
+    def _parse_csv_row_to_telemetry(self, row):
         try:
-            self.packets_received += 1
-            
-            # Extract node information
-            from_node = packet.get('from', 0)
-            from_id = packet.get('fromId', 'unknown')
-            node_hex = hex(from_node) if from_node else 'unknown'
-            
-            logger.debug(f"Packet from {from_id} ({node_hex})")
-            
-            # Check if this is telemetry
-            if packet.get('decoded', {}).get('portnum') == 'TELEMETRY_APP':
-                self.telemetry_packets += 1
-                
-                logger.info(f"Telemetry packet #{self.telemetry_packets} from {from_id}")
-                
-                # Send to uploader
-                self.uploader.add_telemetry(from_id, packet)
-                
-                # Log telemetry details
-                telemetry = packet.get('decoded', {}).get('telemetry', {})
-                for key in ['deviceMetrics', 'environmentMetrics', 'airQualityMetrics']:
-                    if key in telemetry:
-                        metrics = telemetry[key]
-                        logger.info(f"  {key}: {self._summarize_metrics(metrics)}")
-            
+            timestamp = row[0]
+            node_id = row[1].replace('0x', '')  # Strip 0x if present
+            metrics = {
+                'pm10Standard': float(row[2]) if row[2] else None,
+                'pm25Standard': float(row[3]) if row[3] else None,
+                'pm100Standard': float(row[4]) if row[4] else None,
+                'pm10Environmental': float(row[5]) if row[5] else None,
+                'pm25Environmental': float(row[6]) if row[6] else None,
+                'pm100Environmental': float(row[7]) if row[7] else None,
+            }
+            packet = {
+                'rxSnr': float(row[8]) if row[8] else None,
+                'rxRssi': float(row[9]) if row[9] else None,
+                'rxTime': row[10] if row[10] else None,
+                'hopStart': int(row[11]) if row[11] else None,
+                'hopLimit': int(row[12]) if row[12] else None,
+            }
+            return self._format_air_quality_metrics(node_id, metrics, packet, datetime.fromisoformat(timestamp))
         except Exception as e:
-            logger.error(f"Error processing packet: {e}")
-    
-    def _summarize_metrics(self, metrics: Dict) -> str:
-        """Create a brief summary of metrics for logging"""
-        summary_parts = []
-        
-        # Device metrics
-        if 'batteryLevel' in metrics:
-            summary_parts.append(f"Battery={metrics['batteryLevel']}%")
-        if 'voltage' in metrics:
-            summary_parts.append(f"Voltage={metrics['voltage']:.2f}V")
-        
-        # Environment metrics
-        if 'temperature' in metrics:
-            summary_parts.append(f"Temp={metrics['temperature']:.1f}°C")
-        if 'relativeHumidity' in metrics:
-            summary_parts.append(f"RH={metrics['relativeHumidity']:.1f}%")
-        
-        # Air quality metrics
-        if 'pm25Standard' in metrics:
-            summary_parts.append(f"PM2.5={metrics['pm25Standard']:.1f}μg/m³")
-        if 'pm10Standard' in metrics:
-            summary_parts.append(f"PM10={metrics['pm10Standard']:.1f}μg/m³")
-        
-        return ", ".join(summary_parts) if summary_parts else str(metrics)
-    
-    def _print_stats(self):
-        """Print reception and upload statistics"""
-        uptime = datetime.now() - self.start_time
-        upload_stats = self.uploader.get_stats()
-        
-        logger.info(f" STATS - Uptime: {uptime}")
-        logger.info(f"  Packets received: {self.packets_received}")
-        logger.info(f"  Telemetry packets: {self.telemetry_packets}")
-        logger.info(f"  Upload queue: {upload_stats['queue_size']}")
-        logger.info(f"  Total uploaded: {upload_stats['total_uploaded']}")
-        logger.info(f"  Last upload: {upload_stats['last_upload']}")
-    
-    def stop(self):
-        """Stop the receiver"""
-        logger.info("Stopping Meshtastic receiver...")
-        self.running = False
-        
-        try:
-            if self.interface:
-                pub.unsubscribe(self._on_receive, "meshtastic.receive")
-                self.interface.close()
-                logger.info(" Meshtastic interface closed")
-        except Exception as e:
-            logger.error(f"Error closing interface: {e}")
+            logger.error(f'Error parsing row: {e}')
+            return None
 
 
 def signal_handler(signum, frame):
     """Handle shutdown signals"""
     logger.info(f"Received signal {signum}, shutting down...")
-    global receiver, uploader
-    if receiver:
-        receiver.stop()
+    global uploader
     if uploader:
         uploader.shutdown()
     sys.exit(0)
@@ -469,29 +399,23 @@ def signal_handler(signum, frame):
 def main():
     """Main entry point"""
     logger.info("Starting Raspberry Pi Meshtastic to Supabase Uploader")
-    logger.info(f"  TTY Device: {TTY_DEVICE}")
+    logger.info(f"  Data Directory: {DATA_DIR}")
+    logger.info(f"  Poll Interval: {POLL_INTERVAL_SEC}s")
     logger.info(f"  API Base: {API_BASE_URL}")
     logger.info(f"  Upload Interval: {UPLOAD_INTERVAL_SEC}s")
     logger.info(f"  Batch Size: {UPLOAD_BATCH_SIZE}")
     logger.info(f"  Debug Mode: {DEBUG}")
     
     # Check dependencies
-    if not MESHTASTIC_AVAILABLE:
-        logger.error(" Meshtastic package not available")
-        sys.exit(1)
+    # MESHTASTIC_AVAILABLE is removed, so no check here.
     
     if not SUPABASE_SERVICE_KEY:
         logger.error("SUPABASE_SERVICE_KEY environment variable required")
         sys.exit(1)
     
-    # Check TTY device
-    if len(sys.argv) > 1:
-        tty_device = sys.argv[1]
-    else:
-        tty_device = TTY_DEVICE
-    
-    if not os.path.exists(tty_device):
-        logger.error(f"TTY device {tty_device} not found")
+    # Check data directory
+    if not os.path.exists(DATA_DIR):
+        logger.error(f"Data directory {DATA_DIR} not found")
         sys.exit(1)
     
     # Setup signal handlers
@@ -499,16 +423,13 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     
     # Initialize components
-    global uploader, receiver
+    global uploader
     uploader = MeshtasticTelemetryUploader()
-    receiver = MeshtasticReceiver(tty_device, uploader)
     
-    try:
-        # Start receiving
-        receiver.start()
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        sys.exit(1)
+    # Start polling and wait for uploads
+    uploader._poll_once()
+    time.sleep(UPLOAD_INTERVAL_SEC * 2)  # Wait for potential uploads
+    uploader.shutdown()
 
 
 if __name__ == "__main__":
