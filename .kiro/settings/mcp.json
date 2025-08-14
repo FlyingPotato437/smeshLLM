@@ -1,4 +1,108 @@
 {
   "mcpServers": {
+    "@21st-dev/magic": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@21st-dev/magic@latest"
+      ],
+      "env": {
+        "API_KEY": "d4c250d88e08402ea75e8f2843ee328f07272b8de8070ff4461983e3388cebba"
+      }
+    },
+    "perplexity-ask": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "server-perplexity-ask"
+      ],
+      "env": {
+        "PERPLEXITY_API_KEY": "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"
+      }
+    },
+    "context7": {
+      "url": "https://mcp.context7.com/mcp"
+    },
+    "Supabase": {
+      "command": "npx -y @supabase/mcp-server-postgrest@latest --apiUrl https://vanqyqnugswokfchdhpk.supabase.co/rest/v1 --apiKey eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhbnF5cW51Z3N3b2tmY2hkaHBrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MDE0NDEsImV4cCI6MjA2NjI3NzQ0MX0.2GnvaZf7cZgnzV7VxMzJ0xxJsSe5jyWCf1LnRMoc9vk --schema public",
+      "env": {
+        "SUPABASE_URL": "https://vanqyqnugswokfchdhpk.supabase.co",
+        "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhbnF5cW51Z3N3b2tmY2hkaHBrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MDE0NDEsImV4cCI6MjA2NjI3NzQ0MX0.2GnvaZf7cZgnzV7VxMzJ0xxJsSe5jyWCf1LnRMoc9vk",
+        "SUPABASE_SERVICE_ROLE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhbnF5cW51Z3N3b2tmY2hkaHBrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MDcwMTQ0MSwiZXhwIjoyMDY2Mjc3NDQxfQ.iWDU9-lOzMRn_nFwP7izNRTsOxY8trVRFY-lVw7TaY4",
+        "DATABASE_URL": "postgresql://postgres.vanqyqnugswokfchdhpk:SMeshLLM@aws-0-us-east-2.pooler.supabase.com:6543/postgres"
+      }
+    },
+    "Supabase DB": {
+      "command": "npx supabase db push",
+      "env": {
+        "SUPABASE_URL": "https://vanqyqnugswokfchdhpk.supabase.co",
+        "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhbnF5cW51Z3N3b2tmY2hkaHBrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MDE0NDEsImV4cCI6MjA2NjI3NzQ0MX0.2GnvaZf7cZgnzV7VxMzJ0xxJsSe5jyWCf1LnRMoc9vk"
+      }
+    },
+    "Supabase Functions": {
+      "command": "npx supabase functions serve",
+      "env": {
+        "SUPABASE_URL": "https://vanqyqnugswokfchdhpk.supabase.co",
+        "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhbnF5cW51Z3N3b2tmY2hkaHBrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MDE0NDEsImV4cCI6MjA2NjI3NzQ0MX0.2GnvaZf7cZgnzV7VxMzJ0xxJsSe5jyWCf1LnRMoc9vk"
+      }
+    },
+    "Supabase Admin": {
+      "command": "node ./scripts/admin.js",
+      "env": {
+        "SUPABASE_SERVICE_ROLE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhbnF5cW51Z3N3b2tmY2hkaHBrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MDcwMTQ0MSwiZXhwIjoyMDY2Mjc3NDQxfQ.iWDU9-lOzMRn_nFwP7izNRTsOxY8trVRFY-lVw7TaY4"
+      }
+    },
+    "Supabase Client Test": {
+      "command": "node ./scripts/testClient.js",
+      "env": {
+        "SUPABASE_URL": "https://vanqyqnugswokfchdhpk.supabase.co",
+        "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhbnF5cW51Z3N3b2tmY2hkaHBrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MDE0NDEsImV4cCI6MjA2NjI3NzQ0MX0.2GnvaZf7cZgnzV7VxMzJ0xxJsSe5jyWCf1LnRMoc9vk"
+      }
+    },
+    "byterover-mcp": {
+      "url": "https://mcp.byterover.dev/mcp?machineId=1f04ef86-adf4-6b40-8af5-58b276e0e30f"
+    },
+    "Framelink Figma MCP": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "figma-developer-mcp",
+        "--figma-api-key=Yfigd_j6JlaGcTw4pL6OnzkPV3gSOiR0Yg4fpvVyLWMY75",
+        "--stdio"
+      ]
+    },
+    "gibson": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "gibson-cli@latest",
+        "gibson",
+        "mcp",
+        "run"
+      ],
+      "env": {}
+    },
+    "puppeteer": {
+      "command": "puppeteer-mcp-server",
+      "args": [],
+      "env": {}
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-brave-search"
+      ],
+      "env": {
+        "BRAVE_API_KEY": "BSAo4dBGw3cjSij0I_beemHF1yf63r-"
+      }
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch"
+      ]
+    }
   }
+
 }
