@@ -1,2 +1,13 @@
 # Local Netlify folder
 .netlify
+
+# Virtual environment
+venv/
+
+# Large library files that exceed GitHub's file size limits
+venv/lib/python3.11/site-packages/clang/native/libclang.dylib
+venv/lib/python3.11/site-packages/duckdb/duckdb.cpython-311-darwin.so
+venv/lib/python3.11/site-packages/onnxruntime/capi/libonnxruntime.1.22.1.dylib
+venv/lib/python3.11/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so
+venv/lib/python3.11/site-packages/torch/lib/libtorch_cpu.dylib
+venv/lib/python3.11/site-packages/tensorflow/libtensorflow_cc.2.dylib
