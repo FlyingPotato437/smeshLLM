@@ -1,0 +1,100 @@
+# SmeshLLM Python Services Requirements
+# Real atmospheric modeling and physics-informed neural networks
+
+# FastAPI for REST API services
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+python-multipart==0.0.6
+
+# HYSPLIT Integration
+pysplit==0.3.4
+# Alternative: https://github.com/mscross/pysplit
+
+# Atmospheric Physics and Scientific Computing
+numpy==1.24.3
+pandas==2.0.3
+scipy==1.11.3
+xarray==2023.8.0
+
+# Machine Learning for PINNs
+torch==2.1.0
+tensorflow==2.14.0
+# Optional: jax==0.4.20 for high-performance computing
+
+# Physics-Informed Neural Networks
+# Custom PINN implementations and scientific ML
+scikit-learn==1.3.0
+matplotlib==3.7.2
+seaborn==0.12.2
+
+# Atmospheric Data Processing
+netcdf4==1.6.4
+h5py==3.9.0
+cfgrib==0.9.10.4  # For GRIB meteorological data
+
+# Geographic and Spatial Analysis
+cartopy==0.22.0
+pyproj==3.6.1
+shapely==2.0.1
+geopandas==0.13.2
+
+# Geographic and Spatial Analysis (essential for coordinate processing)
+rasterio==1.3.8  # For basic geospatial data processing if needed
+fiona==1.9.4     # Geospatial data I/O for coordinate systems
+
+# Air Quality Data Integration
+requests==2.31.0
+aiohttp==3.8.5
+python-dateutil==2.8.2
+
+# Weather Data Integration - GridMET and VPD
+pygridmet>=0.19.4  # GridMET meteorological data access via NCSS
+# Fire weather indices and real meteorological data from GridMET (4km resolution)
+
+# Database Integration
+asyncpg==0.28.0
+psycopg2-binary==2.9.7
+sqlalchemy==2.0.21
+
+# Logging and Monitoring
+loguru==0.7.2
+prometheus-client==0.18.0
+
+# RAG System - OpenAI and Embeddings
+openai==1.3.5
+tiktoken==0.5.1
+sentence-transformers==2.2.2
+
+# OpenAQ V3 API Client
+openaq
+
+# Natural Language Processing
+nltk==3.8.1
+spacy==3.7.2
+
+# PDF Processing for Document Ingestion
+PyPDF2==3.0.1
+PyMuPDF==1.23.8
+python-docx==0.8.11
+
+# Vector Search and Similarity
+faiss-cpu==1.7.4  # For local vector search if needed
+chromadb==0.4.15  # Alternative vector database
+
+# Testing and Development
+pytest==7.4.2
+pytest-asyncio==0.21.1
+black==23.9.1
+isort==5.12.0
+mypy==1.5.1
+
+# Fire Weather Index calculations (Canadian CFFDRS)
+xclim==0.46.0  # Official Canadian Fire Weather Index implementation
+
+# LANDFIRE vegetation and fuel data integration
+httpx==0.25.0  # HTTP client for LANDFIRE WMS/WCS services
+
+# Optional: GPU acceleration
+# nvidia-ml-py==12.535.108  # For GPU monitoring
+# cupy-cuda11x==12.2.0      # For GPU-accelerated NumPy operations

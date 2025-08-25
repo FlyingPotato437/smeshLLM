@@ -1,0 +1,58 @@
+{
+  "timestamp": "2025-07-18T10:51:48.098173",
+  "validation_results": {
+    "physics": {
+      "passed": 2,
+      "total": 3,
+      "details": [
+        {
+          "test": "Conservation Law (PM2.5 \u2264 PM10)",
+          "passed": true,
+          "violations": 0,
+          "total_cases": 50
+        },
+        {
+          "test": "Positive Concentrations",
+          "passed": true,
+          "negative_pm25": 0,
+          "negative_pm10": 0
+        },
+        {
+          "test": "Reasonable PM2.5/PM1.0 Ratios",
+          "passed": false,
+          "reasonable": 7,
+          "total": 20
+        }
+      ]
+    },
+    "ranges": {
+      "passed": 2,
+      "total": 2,
+      "details": [
+        {
+          "test": "PM2.5 Realistic Range (0-200 \u03bcg/m\u00b3)",
+          "passed": true,
+          "realistic": 100,
+          "total": 100,
+          "min": 0.0,
+          "max": 30.634132385253906,
+          "mean": 19.4309401011467
+        },
+        {
+          "test": "PM10 Realistic Range (0-300 \u03bcg/m\u00b3)",
+          "passed": true,
+          "realistic": 100,
+          "total": 100,
+          "min": 5.257539749145508,
+          "max": 40.82733154296875,
+          "mean": 28.28060100078583
+        }
+      ]
+    },
+    "meteorology": {
+      "passed": 3,
+      "total": 3,
+      "details": [
+        {
+          "test": "Temperature Sensitivity",
+          "passed": 

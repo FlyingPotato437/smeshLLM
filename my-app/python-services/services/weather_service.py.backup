@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""
+Weather Service using Open-Meteo API
+Provides current weather conditions and forecasts for fire weather analysis
+"""
+
+import asyncio
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+
+import httpx
+from pydantic import BaseModel, Field
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class WeatherConditions(BaseModel):
+    """Current weather conditions"""
+    temperature_2m: float = Field(..., description="Temperature at 2m height (°C)")
+    relative_humidity_2m: float = Field(..., description="Relative humidity at 2m height (%)")
+    wind_speed_10m: float = Field(..., description="Wind speed at 10m height (m/s)")
+    wind_direction_10m: float = Field(..., description="Wind direction at 10m height (degrees)")
+    wind_gusts_10m: Optional[float] = Field(None, description="Wind gusts at 10m height (m/s)")
+    pressure_msl: float = Field(..., description="Mean sea level pressure (hPa)")
+    precipitation: float = Field(..., description="Precipitation (mm)")
+    cloud_cover: float = Field(..., description="Cloud cover (%)")
+    visibility: Optional[float] = Field(None, description="Visibility (m)")
+
+class FireWeatherIndex(BaseModel):
+    """Fire weather indices"""
+    temperature: float
+    humidity: float
+    wind_speed: float
+    precipitation: float
+    fire_danger_rating: str  # LOW, MODERATE, HIGH, VERY_HIGH, EXTREME
+    haines_index: Optional[float] = None  # Atmospheric instability
+    fosberg_fire_weather_index: Optional[float] = None
+
+class WeatherForecast(BaseModel):
+    """Weather forecast data"""
+    datetime: str
+    temperature_2m: float
+    relative_humidity_2m: float
+    wind_speed_10m: float
+    wind_direction_10m: float
+    precipitation_probability: float
+    precipitation: float
+
+class WeatherResponse(BaseModel):
+    """Complete weather response"""
+    location: Dict[str, float]
+    current: WeatherConditions
+    fire_weather: FireWeatherIndex
+    forecast: List[WeatherForecast]
+    data_source: str
+    timestamp: str
+
+class WeatherService:
+    """Weather service using Open-Meteo API (no API key required)"""
+    
+    def __init__(self):
+        self.base_url = "https://api.open-meteo.com/v1"
+        self.client = httpx.AsyncClient(timeout=30.0)
+        logger.info("🌤️ Weather service initialized with Open-Meteo API")
+    
+    async def get_weather_data(self, latitude: float, longitude: float, 
+                             include_forecast: bool = True) -> Dict[str, Any]:
+        """
+        Get comprehensive weather data for fire weather analysis
+        
+        Args:
+            latitude: Location latitude
+            longitude: Location longitude
+            include_forecast: Include forecast data
+            
+        Returns:
+            Complete weather analysis
+        """
+        try:
+            logger.info(f"🌤️ Getting weather data for {latitude}, {longitude}")
+            
+            # Build API parameters for current weather and forecast
+            params = {
+                "latitude": latitude,
+                "longitude": longitude,
+                "current": [
+                    "temperature_2m",
+                    "relative_humidity_2m", 
+                    "wind_speed_10m",
+                    "wind_direction_10m",
+                    "wind_gusts_10m",
+                    "pressure_msl",
+                    "precipitation",
+                    "cloud_cover"
+                ],
+                "timezone": "auto"
+            }
+            
+            if include_forecast:
+                params["hourly"] = [
+                    "temperature_2m",
+                    "relative_humidity_2m",
+                    "wind_speed_10m", 
+                    "wind_direction_10m",
+                    "precipitation_probability",
+                    "precipitation"
+                ]
+                params["forecast_days"] = 3
+            
+            # Query Open-Meteo API
+            url = f"{self.base_url}/forecast"
+            response = await self.client.get(url, params=params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Parse current conditions
+                current_data = data.get("current", {})
+                current = WeatherConditions(
+                    temperature_2m=current_data.get("temperature_2m", 0),
+                    relative_humidity_2m=current_data.get("relative_humidity_2m", 50),
+                    wind_speed_10m=current_data.get("wind_speed_10m", 0),
+                    wind_direction_10m=current_data.get("wind_direction_10m", 0),
+                    wind_gusts_10m=current_data.get("wind_gusts_10m"),
+                    pressure_msl=current_data.get("pressure_msl", 1013.25),
+                    precipitation=current_data.get("precipitation", 0),
+                    cloud_cover=current_data.get("cloud_cover", 0)
+                )
+                
+                # Get REAL fire weather indices from GridMET
+                fire_weather = await self.get_real_fire_weather_indices(latitude, longitude)
+                
+                # Parse forecast if requested
+                forecast = []
+                if include_forecast and "hourly" in data:
+                    forecast = self.parse_forecast_data(data["hourly"])
+                
+                result = {
+                    "location": {"latitude": latitude, "longitude": longitude},
+                    "current": current.dict(),
+                    "fire_weather": fire_weather.dict() if fire_weather else None,
+                    "forecast": [f.dict() for f in forecast],
+                    "data_source": "Open-Meteo + GridMET Fire Indices",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                logger.info(f"✅ Weather data retrieved - Temp: {current.temperature_2m}°C, Wind: {current.wind_speed_10m}m/s")
+                return result
+                
+            else:
+                logger.error(f"❌ Weather API error: {response.status_code}")
+                return {
+                    "error": f"Weather API error: {response.status_code}",
+                    "location": {"latitude": latitude, "longitude": longitude},
+                    "data_source": "Open-Meteo-Error",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Weather service error: {e}")
+            return {
+                "error": str(e),
+                "location": {"latitude": latitude, "longitude": longitude},
+                "data_source": "Weather-Service-Error", 
+                "timestamp": datetime.utcnow().isoformat()
+            }
+    
+    async def get_real_fire_weather_indices(self, latitude: float, longitude: float) -> FireWeatherIndex:
+        """Get REAL fire weather indices from GridMET (not calculated)"""
+        try:
+            # Import GridMET service to get real fire weather data
+            from services.gridmet_service_final import FinalGridMETWeatherService
+            
+            gridmet_service = FinalGridMETWeatherService()
+            
+            # Get real fire weather indices from GridMET
+            fire_data = await gridmet_service.get_fire_weather_indices(
+                latitude=latitude,
+                longitude=longitude
+            )
+            
+            if fire_data and 'fire_weather_indices' in fire_data:
+                indices = fire_data['fire_weather_indices']
+                
+                return FireWeatherIndex(
+                    temperature=fire_data.get('temperature_c', 0),
+                    humidity=fire_data.get('relative_humidity_pct', 0),
+                    wind_speed=fire_data.get('wind_speed_ms', 0),
+                    precipitation=fire_data.get('precipitation_mm', 0),
+                    fire_danger_rating=indices.get('fire_danger_class', 'UNKNOWN'),
+                    fosberg_fire_weather_index=indices.get('fosberg_fire_weather_index')  # REAL DATA
+                )
+            else:
+                # Fallback to basic weather without fake calculations
+                logger.warning("GridMET fire indices unavailable, using basic weather only")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to get real fire weather indices: {e}")
+            return None
+    
+    def parse_forecast_data(self, hourly_data: Dict[str, Any]) -> List[WeatherForecast]:
+        """Parse hourly forecast data"""
+        
+        forecasts = []
+        times = hourly_data.get("time", [])
+        
+        for i, time_str in enumerate(times[:24]):  # Next 24 hours
+            try:
+                forecast = WeatherForecast(
+                    datetime=time_str,
+                    temperature_2m=hourly_data.get("temperature_2m", [])[i] if i < len(hourly_data.get("temperature_2m", [])) else 0,
+                    relative_humidity_2m=hourly_data.get("relative_humidity_2m", [])[i] if i < len(hourly_data.get("relative_humidity_2m", [])) else 50,
+                    wind_speed_10m=hourly_data.get("wind_speed_10m", [])[i] if i < len(hourly_data.get("wind_speed_10m", [])) else 0,
+                    wind_direction_10m=hourly_data.get("wind_direction_10m", [])[i] if i < len(hourly_data.get("wind_direction_10m", [])) else 0,
+                    precipitation_probability=hourly_data.get("precipitation_probability", [])[i] if i < len(hourly_data.get("precipitation_probability", [])) else 0,
+                    precipitation=hourly_data.get("precipitation", [])[i] if i < len(hourly_data.get("precipitation", [])) else 0
+                )
+                forecasts.append(forecast)
+            except (IndexError, TypeError):
+                continue
+        
+        return forecasts
+    
+    async def get_fire_weather_forecast(self, latitude: float, longitude: float, 
+                                      days: int = 3) -> Dict[str, Any]:
+        """Get specialized fire weather forecast"""
+        
+        try:
+            # Get extended weather data
+            params = {
+                "latitude": latitude,
+                "longitude": longitude,
+                "daily": [
+                    "temperature_2m_max",
+                    "temperature_2m_min", 
+                    "relative_humidity_2m_max",
+                    "relative_humidity_2m_min",
+                    "wind_speed_10m_max",
+                    "wind_gusts_10m_max",
+                    "precipitation_sum",
+                    "precipitation_probability_max"
+                ],
+                "forecast_days": days,
+                "timezone": "auto"
+            }
+            
+            url = f"{self.base_url}/forecast"
+            response = await self.client.get(url, params=params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                daily_data = data.get("daily", {})
+                
+                fire_forecast = []
+                times = daily_data.get("time", [])
+                
+                for i, date_str in enumerate(times):
+                    try:
+                        max_temp = daily_data.get("temperature_2m_max", [])[i]
+                        min_humidity = daily_data.get("relative_humidity_2m_min", [])[i]
+                        max_wind = daily_data.get("wind_speed_10m_max", [])[i]
+                        precipitation = daily_data.get("precipitation_sum", [])[i]
+                        
+                        # TODO: Use real daily fire weather forecasts from NWCG or GridMET
+                        # Current approach just provides basic weather without fake fire danger calculations
+                        
+                        fire_forecast.append({
+                            "date": date_str,
+                            "max_temperature": max_temp,
+                            "min_humidity": min_humidity,
+                            "max_wind_speed": max_wind,
+                            "precipitation": precipitation,
+                            "fire_danger_level": "USE_REAL_DATA",  # Remove fake calculation
+                            "note": "Fire danger should come from official NWS or NWCG forecasts"
+                        })
+                        
+                    except (IndexError, TypeError):
+                        continue
+                
+                return {
+                    "location": {"latitude": latitude, "longitude": longitude},
+                    "fire_weather_forecast": fire_forecast,
+                    "data_source": "Open-Meteo",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+            else:
+                return {"error": f"API error: {response.status_code}"}
+                
+        except Exception as e:
+            logger.error(f"Fire weather forecast error: {e}")
+            return {"error": str(e)}
+    
+    async def close(self):
+        """Close HTTP client"""
+        await self.client.aclose()
+
+# Example usage and testing
+if __name__ == "__main__":
+    async def test_weather():
+        service = WeatherService()
+        
+        # Test with Santa Clara County coordinates
+        result = await service.get_weather_data(37.4419, -122.1430)
+        
+        print("🌤️ Current Weather:")
+        current = result.get("current", {})
+        print(f"   Temperature: {current.get('temperature_2m')}°C")
+        print(f"   Humidity: {current.get('relative_humidity_2m')}%")
+        print(f"   Wind: {current.get('wind_speed_10m')} m/s")
+        
+        fire_weather = result.get("fire_weather", {})
+        print(f"   Fire Danger: {fire_weather.get('fire_danger_rating')}")
+        
+        await service.close()
+    
+    # Run test
+    asyncio.run(test_weather())

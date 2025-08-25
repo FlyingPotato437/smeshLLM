@@ -1,0 +1,28 @@
+{
+  "model_id": "stanford_pinn_20250718_103012",
+  "training_dataset": "n5_stanford.csv",
+  "model_type": "Physics-Informed Neural Network",
+  "input_features": [
+    "x",
+    "y",
+    "t",
+    "temp",
+    "humidity",
+    "wind_speed",
+    "wind_dir",
+    "pm1",
+    "source"
+  ],
+  "output_features": [
+    "pm25_concentration",
+    "pm10_concentration"
+  ],
+  "physics_parameters": {
+    "diffusion_x": 5.0,
+    "diffusion_y": 5.0,
+    "decay_rate": 9.999999747378752e-05,
+    "wind_influence": 0.5
+  },
+  "final_train_loss": 35.73579128478703,
+  "final_val_loss": 22.341426849365234
+}

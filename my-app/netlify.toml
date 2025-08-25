@@ -1,0 +1,41 @@
+[build]
+  command = "NODE_ENV=production npm run build"
+  publish = ".next"
+  functions = "netlify/functions"
+
+[build.on-success]
+  command = "rm -rf .next/cache"
+
+[build.environment]
+  NODE_VERSION = "20"
+  NEXT_TELEMETRY_DISABLED = "1"
+  NODE_OPTIONS = "--max_old_space_size=4096"
+  # Optimize Next.js build
+  NEXT_TURBO = "1"
+  # Enable incremental static regeneration
+  NEXT_FORCE_ISR = "1"
+
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["@supabase/supabase-js", "@google/generative-ai"]
+  
+  # Increase timeout to 180 seconds (max allowed by Netlify)
+
+  
+  # Configure individual function timeouts
+  [functions.timeout]
+    chat = 180   # seconds (3 minutes)
+
+  [functions.edge]
+    timeout = 30  # seconds
+  
+  # Enable streaming responses
+  [functions.edge_handlers]
+    path = "netlify/edge-handlers"
+
+# Configure redirects and headers
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+  force = true

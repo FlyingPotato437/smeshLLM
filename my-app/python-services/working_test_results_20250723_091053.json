@@ -1,0 +1,47 @@
+{
+  "location": {
+    "name": "Santa Clara County, CA",
+    "latitude": 37.4419,
+    "longitude": -122.143
+  },
+  "timestamp": "2025-07-23T09:10:52.974816",
+  "services": {
+    "weather": {
+      "current_weather": {
+        "temperature_f": 75,
+        "humidity_percent": 45,
+        "wind_speed_mph": 8,
+        "wind_direction_deg": 270,
+        "source": "Estimated"
+      },
+      "fire_danger_rating": "Moderate",
+      "fire_weather_index": 24
+    },
+    "fire_detection": {
+      "fire_count": 0,
+      "data_source": "Estimated",
+      "search_radius_km": 50,
+      "api_status": "failed",
+      "note": "Set NASA_FIRMS_API_KEY for real fire data"
+    },
+    "wind_analysis": {
+      "input_wind_speed_ms": 3.57632,
+      "adjusted_wind_speed_ms": 4.291583999999999,
+      "wind_direction_deg": 270,
+      "terrain_factor": 1.2,
+      "method": "simplified_terrain_adjustment",
+      "windninja_available": false
+    }
+  },
+  "integrated_analysis": {
+    "overall_risk_level": "LOW-MODERATE",
+    "risk_factors": [
+      "Moderate fire weather conditions"
+    ],
+    "recommendations": [
+      "\u26a0\ufe0f Monitor fire conditions closely"
+    ],
+    "services_working": 3,
+    "data_quality": "Good"
+  }
+}

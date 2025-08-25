@@ -1,0 +1,94 @@
+{
+  "location": {
+    "name": "Santa Clara County, CA",
+    "latitude": 37.4419,
+    "longitude": -122.143
+  },
+  "test_timestamp": "2025-07-22T19:54:53.675162",
+  "service_results": {
+    "windninja": {
+      "success": true,
+      "result": {
+        "fallback_analysis": {
+          "method": "simplified_terrain_estimation",
+          "input_wind_speed_ms": 12.0,
+          "input_wind_direction_deg": 225,
+          "estimated_effects": {
+            "upslope_acceleration": "10-30% speed increase possible on upward slopes",
+            "valley_channeling": "Wind may be channeled through valleys",
+            "ridge_acceleration": "Possible acceleration over ridges and peaks",
+            "lee_side_turbulence": "Expect turbulent flow in lee of hills"
+          },
+          "fire_behavior_notes": {
+            "terrain_uncertainty": "Complex terrain effects not modeled",
+            "recommendation": "Use local weather stations and fire weather observations",
+            "caution": "Actual wind speeds may vary significantly from input values"
+          }
+        }
+      }
+    },
+    "fire_detection": {
+      "success": false,
+      "error": "module 'certifi' has no attribute 'where'"
+    },
+    "vegetation": {
+      "success": false,
+      "error": "cannot import name 'handle_service_errors' from 'core.error_handler' (/Users/srikanthsamy1/Desktop/StanfordUniversity/smeshLLM/my-app/python-services/core/error_handler.py)"
+    },
+    "weather": {
+      "success": true,
+      "result": {
+        "temperature_f": 85,
+        "humidity_percent": 35,
+        "wind_speed_mph": 25,
+        "wind_direction_deg": 225,
+        "precipitation_24h": 0.0,
+        "source": "simulated"
+      }
+    }
+  },
+  "integration_result": {
+    "success": true,
+    "result": {
+      "location": {
+        "name": "Santa Clara County, CA",
+        "latitude": 37.4419,
+        "longitude": -122.143
+      },
+      "analysis_timestamp": "2025-07-22T19:54:53.675107",
+      "services_tested": [
+        "windninja",
+        "fire_detection",
+        "vegetation",
+        "weather"
+      ],
+      "success_rate": 50.0,
+      "fire_weather_conditions": {
+        "wind_analysis": {
+          "source": "fallback_estimation",
+          "method": "simplified_terrain_estimation"
+        },
+        "weather": {
+          "temperature_f": 85,
+          "humidity_percent": 35,
+          "wind_speed_mph": 25
+        }
+      },
+      "risk_assessment": {},
+      "recommendations": [
+        "\u2705 Current conditions within normal parameters"
+      ]
+    }
+  },
+  "summary": {
+    "successful_services": [
+      "windninja",
+      "weather"
+    ],
+    "failed_services": [
+      "fire_detection",
+      "vegetation"
+    ],
+    "success_rate": 50.0
+  }
+}
