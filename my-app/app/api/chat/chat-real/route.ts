@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { processWildFireGPTChat } from '@/lib/ai/smesh-llm';
 import { extractLocationFromQuery, fallbackExtractLocation } from '@/lib/ai/location-extractor';
 
+// Vercel serverless function configuration (App Router)
+export const maxDuration = 60;
+
 // Set a timeout for the API request (in milliseconds)
 const API_TIMEOUT = 100000; // 90 seconds - allow time for real data integration and multiple tool calls
 

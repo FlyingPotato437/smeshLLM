@@ -1,10 +1,4 @@
 {
-  "functions": {
-    "app/api/chat/chat-real/route.ts": {
-      "maxDuration": 60,
-      "memory": 3008
-    }
-  },
   "regions": ["sfo1"],
   "headers": [
     {
