@@ -400,12 +400,35 @@ export class WildFireGPTAlgorithm {
 
         console.log('🔧 Available tools:', this.tools.map(t => t.function.name));
         
-        let response = await getGeminiClient().chat.completions.create({
-            model: 'gemini-1.5-pro',
-            messages,
-            tools: this.tools,
-            tool_choice: 'auto'
-        });
+        let response;
+        let retryCount = 0;
+        const maxRetries = 3;
+        
+        while (retryCount < maxRetries) {
+            try {
+                response = await getGeminiClient().chat.completions.create({
+                    model: 'gemini-2.5-pro',
+                    messages,
+                    tools: this.tools,
+                    tool_choice: 'auto'
+                });
+                break; // Success, exit retry loop
+            } catch (error: any) {
+                if (error.status === 429) {
+                    retryCount++;
+                    const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff
+                    console.log(`⏳ Rate limited. Retry ${retryCount}/${maxRetries} after ${delay}ms`);
+                    
+                    if (retryCount >= maxRetries) {
+                        throw new Error(`Rate limit exceeded after ${maxRetries} attempts. Please try again later.`);
+                    }
+                    
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                } else {
+                    throw error; // Re-throw non-rate-limit errors
+                }
+            }
+        }
 
         let choice = response.choices[0];
         console.log('🤖 LLM Response choice:', choice);

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 Unified FastAPI server for all Python services
-Integrates HYSPLIT, PINN, RAG, OpenAQ, and Hybrid RAG services
+Integrates HYSPLIT, RAG, OpenAQ, and Hybrid RAG services
 """
 
 import os
+
 from dotenv import load_dotenv
 load_dotenv('../.env.production')
 import uuid
@@ -19,18 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 
-# Import our service classes - conditional PINN import
-try:
-    from services.pinn_service import PINNTrainingRequest, PINNPredictionRequest, PINNTrainer, PINNPredictor
-    PINN_AVAILABLE = True
-except (ImportError, AttributeError) as e:
-    print(f"WARNING: PINN service not available: {e}")
-    PINN_AVAILABLE = False
-    # Create stub classes to avoid NameError
-    class PINNTrainingRequest:
-        pass
-    class PINNPredictionRequest:
-        pass
+# PINN service removed - no longer needed
 try:
     from services.rag_service import RAGOrchestrator, SemanticSearchRequest
     from services.hybrid_rag_service import HybridRAGOrchestrator, HybridRAGRequest
@@ -249,8 +239,7 @@ async def health_check():
     """Health check for all services"""
     services_status = {
         "hysplit": "Manual implementation (no unified service class)",
-        "pinn_trainer": "✅ Ready" if pinn_trainer else "❌ Not initialized",
-        "pinn_predictor": "✅ Ready" if pinn_predictor else "❌ Not initialized", 
+        # PINN services removed 
         "rag_orchestrator": "✅ Ready" if rag_orchestrator else "❌ Not initialized",
         "hybrid_rag_orchestrator": "✅ Ready" if hybrid_rag_orchestrator else "❌ Not initialized",
         "openaq_service": "✅ Ready" if openaq_service else "❌ Not initialized",
@@ -306,51 +295,7 @@ async def run_hysplit(params: SimpleHysplitRequest, background_tasks: Background
             error=str(e)
         )
 
-# PINN endpoints (conditional)
-if PINN_AVAILABLE:
-    @app.post("/pinn/train", response_model=ServiceResponse)
-    async def train_pinn(request: PINNTrainingRequest):
-        """Train Physics-Informed Neural Network"""
-        if not pinn_trainer:
-            raise HTTPException(status_code=503, detail="PINN trainer not available")
-        
-        try:
-            logger.info(f"🧠 Training PINN model: {request.location}")
-            result = await pinn_trainer.train_model(request)
-            
-            return ServiceResponse(
-                success=True,
-                data=result
-            )
-            
-        except Exception as e:
-            logger.error(f"❌ PINN training failed: {e}")
-            return ServiceResponse(
-                success=False,
-                error=str(e)
-            )
-
-    @app.post("/pinn/predict", response_model=ServiceResponse) 
-    async def predict_pinn(request: PINNPredictionRequest):
-        """Generate PINN predictions"""
-        if not pinn_predictor:
-            raise HTTPException(status_code=503, detail="PINN predictor not available")
-        
-        try:
-            logger.info(f"🔮 PINN prediction: {request.location}")
-            result = await pinn_predictor.predict(request)
-            
-            return ServiceResponse(
-                success=True,
-                data=result
-            )
-            
-        except Exception as e:
-            logger.error(f"❌ PINN prediction failed: {e}")
-            return ServiceResponse(
-                success=False,
-                error=str(e)
-            )
+# PINN endpoints removed - no longer needed
 
 # RAG endpoints
 @app.post("/rag/search", response_model=ServiceResponse)
