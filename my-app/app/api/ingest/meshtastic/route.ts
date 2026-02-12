@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+function getSupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+}
 
 interface MeshtasticTelemetry {
   sensor_id: string;
@@ -115,6 +117,7 @@ export async function POST(request: NextRequest) {
     });
     
     // Insert into Supabase
+    const supabase = getSupabase();
     const { data: insertedData, error } = await supabase
       .from('meshtastic_telemetry')
       .insert(dbRecords)
@@ -172,6 +175,7 @@ export async function GET(request: NextRequest) {
     const hours = parseInt(searchParams.get('hours') || '24');
     
     // Build query
+    const supabase = getSupabase();
     let query = supabase
       .from('meshtastic_telemetry')
       .select('*')
