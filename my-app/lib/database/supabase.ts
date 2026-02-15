@@ -13,7 +13,7 @@ const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Service role client for admin operations
-const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE_KEY ? 
+const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE_KEY ?
   createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY) : null;
 
 // Health check function

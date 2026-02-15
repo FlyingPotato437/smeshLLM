@@ -8,13 +8,18 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
-import { supabase } from '@/lib/database/supabase';
 
-// Initialize Supabase client with service role for data ingestion
-const supabaseClient = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY! // Service role for bypassing RLS
-);
+// Lazy-initialized Supabase client with service role for data ingestion
+let _supabaseClient: ReturnType<typeof createClient> | null = null;
+function getSupabaseClient() {
+  if (!_supabaseClient) {
+    _supabaseClient = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+  }
+  return _supabaseClient;
+}
 
 // ============================================================================
 // VALIDATION SCHEMAS
@@ -336,7 +341,7 @@ export class DataIngestionService {
   private async processSensorReadingBatch(batch: any[]): Promise<void> {
     try {
       // PHASE 1: Write to original table (primary write - must not fail)
-      const { error } = await supabaseClient
+      const { error } = await getSupabaseClient()
         .from('pi_sensor_raw')
         .insert(batch);
       
@@ -351,7 +356,7 @@ export class DataIngestionService {
       try {
         const unifiedBatch = batch.map(record => this.transformToUnifiedSchema(record, 'pi_batch'));
         
-        const { error: unifiedError } = await supabaseClient
+        const { error: unifiedError } = await getSupabaseClient()
           .from('sensor_readings')
           .insert(unifiedBatch);
         
@@ -458,7 +463,7 @@ export class DataIngestionService {
   
   private async processFireDetectionBatch(batch: any[]): Promise<void> {
     try {
-      const { error } = await supabaseClient
+      const { error } = await getSupabaseClient()
         .from('fire_detections')
         .insert(batch);
       
@@ -507,7 +512,7 @@ export class DataIngestionService {
   
   private async processMeteorologicalBatch(batch: any[]): Promise<void> {
     try {
-      const { error } = await supabaseClient
+      const { error } = await getSupabaseClient()
         .from('meteorological_data')
         .insert(batch);
       
@@ -552,7 +557,7 @@ export class DataIngestionService {
   
   private async processAODBatch(batch: any[]): Promise<void> {
     try {
-      const { error } = await supabaseClient
+      const { error } = await getSupabaseClient()
         .from('satellite_aod')
         .insert(batch);
       
@@ -585,7 +590,7 @@ export class DataIngestionService {
   private async associateWithPrescribedBurns(fireDetections: any[]): Promise<void> {
     try {
       // Query for active prescribed burns
-      const { data: activeBurns } = await supabaseClient
+      const { data: activeBurns } = await getSupabaseClient()
         .from('prescribed_burns')
         .select('burn_id, burn_area')
         .in('current_phase', ['ignition', 'active', 'mop_up']);
@@ -596,14 +601,14 @@ export class DataIngestionService {
       for (const detection of fireDetections) {
         for (const burn of activeBurns) {
           // Use PostGIS ST_Within to check if detection is within burn area
-          const { data } = await supabaseClient.rpc('point_within_polygon', {
+          const { data } = await getSupabaseClient().rpc('point_within_polygon', {
             point_wkt: detection.location,
             polygon_wkt: burn.burn_area
           });
           
           if (data) {
             // Update fire detection with prescribed burn association
-            await supabaseClient
+            await getSupabaseClient()
               .from('fire_detections')
               .update({
                 prescribed_burn_id: burn.burn_id,
@@ -622,7 +627,7 @@ export class DataIngestionService {
   private async triggerRealTimeUpdates(table: string, batch: any[]): Promise<void> {
     try {
       // Publish real-time updates for dashboard
-      const channel = supabaseClient.channel('data-updates');
+      const channel = getSupabaseClient().channel('data-updates');
       
       await channel.send({
         type: 'broadcast',
@@ -663,7 +668,7 @@ export class DataIngestionService {
   }> {
     try {
       // Check database connectivity
-      const { error } = await supabaseClient.from('raspberry_pi_sensors').select('count').limit(1);
+      const { error } = await getSupabaseClient().from('raspberry_pi_sensors').select('count').limit(1);
       
       if (error) {
         return {
@@ -673,7 +678,7 @@ export class DataIngestionService {
       }
       
       // Check recent data ingestion rates
-      const { data: recentReadings } = await supabaseClient
+      const { data: recentReadings } = await getSupabaseClient()
         .from('sensor_readings')
         .select('count')
         .gte('timestamp', new Date(Date.now() - 15 * 60 * 1000).toISOString());
