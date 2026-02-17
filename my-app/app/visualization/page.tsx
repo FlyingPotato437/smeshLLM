@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import { Navigation } from '@/components/layout/navigation';
 import { AnimatedBackground } from '@/components/ui/animated-background';
-import { SmokePlume3DViewer } from '@/components/visualization/smoke-plume-3d-viewer';
 import { motion } from 'framer-motion';
 import { Map, Zap, Activity, Wind, Gauge, MessageSquare } from 'lucide-react';
 
@@ -321,22 +320,17 @@ export default function VisualizationPage() {
                 </div>
                 
                 <div className="h-[600px]">
-                  {loading ? (
-                    <div className="w-full h-full flex items-center justify-center text-gray-400">
-                      <div className="text-center">
-                        <div className="animate-spin w-8 h-8 border-2 border-[#8C1515] border-t-transparent rounded-full mx-auto mb-4"></div>
-                        <p>Loading real-time plume data from Supabase...</p>
-                      </div>
+                  <div className="w-full h-full flex items-center justify-center text-gray-400 bg-[#151515] border border-dashed border-gray-600">
+                    <div className="text-center max-w-xl px-6">
+                      <h4 className="text-lg font-semibold text-white mb-3">
+                        Interactive 3D plume map is temporarily disabled
+                      </h4>
+                      <p className="text-sm leading-relaxed">
+                        This production build excludes Deck.gl rendering to prevent dependency/version build failures.
+                        Prediction data and monitoring workflows remain available.
+                      </p>
                     </div>
-                  ) : (
-                    <SmokePlume3DViewer
-                      concentrationData={concentrationData}
-                      sensorData={sampleSensorData}
-                      prescribedBurns={samplePrescribedBurns}
-                      meteorologicalData={sampleMeteorologicalData}
-                      className="w-full h-full"
-                    />
-                  )}
+                  </div>
                 </div>
               </motion.div>
 

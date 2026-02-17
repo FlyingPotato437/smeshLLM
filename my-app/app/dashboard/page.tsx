@@ -3,7 +3,6 @@
 import React, { useState } from 'react';
 import { Navigation } from '@/components/layout/navigation';
 import { AnimatedBackground } from '@/components/ui/animated-background';
-import { SmokePlume3DViewer } from '@/components/visualization/smoke-plume-3d-viewer';
 import { SmeshChat } from '@/components/ui/smesh-chat';
 import EnhancedAirQualityDashboard from '@/components/ui/enhanced-air-quality-dashboard';
 import { CSVUpload } from '@/components/ui/csv-upload';
@@ -344,15 +343,16 @@ export default function DashboardPage() {
                   >
                     <h3 className="text-2xl font-semibold text-white mb-6">3D Visualization</h3>
                     <div className="bg-[#111111] border border-gray-700 p-4">
-                      <div className="w-full h-full">
-                        <SmokePlume3DViewer
-                          concentrationData={plumeData}
-                          sensorData={realSensorData}
-                          prescribedBurns={samplePrescribedBurns}
-                          meteorologicalData={sampleMeteorologicalData}
-                        />
-                        {/* Tooltip for sensor hover */}
-                        <div id="sensor-tooltip" style={{ position: 'absolute', pointerEvents: 'none', display: 'none', zIndex: 1000 }} />
+                      <div className="w-full h-[420px] flex items-center justify-center border border-dashed border-gray-600 bg-[#151515]">
+                        <div className="text-center max-w-xl px-6">
+                          <h4 className="text-lg font-semibold text-white mb-3">
+                            Interactive 3D plume map is temporarily disabled
+                          </h4>
+                          <p className="text-gray-400 text-sm leading-relaxed">
+                            This view is currently turned off in production to avoid Deck.gl build incompatibilities.
+                            Data ingestion, AI analysis, and dashboard metrics still work.
+                          </p>
+                        </div>
                       </div>
                       {realSensorData.length > 0 && (
                         <div className="mt-4 p-3 bg-[#8C1515]/10 border border-[#8C1515]/30">
