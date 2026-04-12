@@ -4,6 +4,7 @@ import { supabase } from '@/lib/database/supabase';
 // Cache for API responses
 const responseCache = new Map<string, { data: any; timestamp: number }>();
 const CACHE_TTL = 30000; // 30 seconds
+let plumeTableMissingLogged = false;
 
 function getCachedResponse(key: string) {
   const cached = responseCache.get(key);
@@ -75,51 +76,68 @@ export async function GET(request: NextRequest) {
         .limit(1000);
 
       if (error) {
-        console.warn('[plume-predictions] Supabase query failed:', error.message);
-        throw error;
+        const isMissingTable = error.message?.includes('relation "public.plume_predictions" does not exist');
+        if (isMissingTable) {
+          if (!plumeTableMissingLogged) {
+            console.warn('[plume-predictions] plume_predictions table is missing. Returning empty plume dataset.');
+            plumeTableMissingLogged = true;
+          }
+          predictionData = [];
+        } else {
+          console.warn('[plume-predictions] Supabase query failed:', error.message);
+          throw error;
+        }
       }
 
-      // Parse geography data and filter by bounds
-      predictionData = (data || [])
-        .map(row => {
-          // Parse PostGIS POINT geometry from location field
-          let latitude = 37.4275, longitude = -122.1697; // default Stanford coordinates
-          
-          if (row.location && typeof row.location === 'object') {
-            // Handle GeoJSON format
-            if (row.location.coordinates) {
-              longitude = row.location.coordinates[0];
-              latitude = row.location.coordinates[1];
+      if (!error) {
+        // Parse geography data and filter by bounds
+        predictionData = (data || [])
+          .map(row => {
+            // Parse PostGIS POINT geometry from location field
+            let latitude: number | null = null;
+            let longitude: number | null = null;
+            
+            if (row.location && typeof row.location === 'object') {
+              // Handle GeoJSON format
+              if (row.location.coordinates) {
+                longitude = row.location.coordinates[0];
+                latitude = row.location.coordinates[1];
+              }
+            } else if (typeof row.location === 'string') {
+              // Handle WKT format like "POINT(-122.1697 37.4275)"
+              const match = row.location.match(/POINT\(([+-]?\d*\.?\d+)\s+([+-]?\d*\.?\d+)\)/);
+              if (match) {
+                longitude = parseFloat(match[1]);
+                latitude = parseFloat(match[2]);
+              }
             }
-          } else if (typeof row.location === 'string') {
-            // Handle WKT format like "POINT(-122.1697 37.4275)"
-            const match = row.location.match(/POINT\(([+-]?\d*\.?\d+)\s+([+-]?\d*\.?\d+)\)/);
-            if (match) {
-              longitude = parseFloat(match[1]);
-              latitude = parseFloat(match[2]);
+            
+            if (latitude === null || longitude === null) {
+              return null;
             }
-          }
-
-          return {
-            id: row.id,
-            prediction_ts: row.prediction_ts,
-            latitude,
-            longitude,
-            altitude_m: row.altitude_m || 100,
-            conc_pm25_ug_m3: row.conc_pm25_ug_m3 || 0,
-            conc_pm10_ug_m3: row.conc_pm10_ug_m3 || 0,
-            model_version: row.model_version || 'HYSPLIT-AI-v1.0'
-          };
-        })
-        .filter(point => 
-          point.latitude >= minLat && point.latitude <= maxLat &&
-          point.longitude >= minLng && point.longitude <= maxLng
-        );
+  
+            return {
+              id: row.id,
+              prediction_ts: row.prediction_ts,
+              latitude,
+              longitude,
+              altitude_m: row.altitude_m ?? null,
+              conc_pm25_ug_m3: row.conc_pm25_ug_m3 ?? null,
+              conc_pm10_ug_m3: row.conc_pm10_ug_m3 ?? null,
+              model_version: row.model_version ?? null
+            };
+          })
+          .filter((point): point is NonNullable<typeof point> => point !== null)
+          .filter(point => 
+            point.latitude >= minLat && point.latitude <= maxLat &&
+            point.longitude >= minLng && point.longitude <= maxLng
+          );
+      }
 
       console.log(`[plume-predictions] Found ${predictionData.length} predictions from Supabase`);
 
     } catch (dbError: any) {
-      console.warn('[plume-predictions] Database error, falling back to mock data:', dbError.message);
+      console.warn('[plume-predictions] Database error, returning empty real-data result:', dbError.message);
     }
 
     // If no real data, do NOT fabricate synthetic data

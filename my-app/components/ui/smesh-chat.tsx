@@ -357,14 +357,11 @@ Ask me about smoke plume dispersion, wildfire risk assessment, atmospheric condi
     setMessages(prev => [...prev, tempMessage]);
 
     try {
-      // Determine the API endpoint based on the environment
-      const apiUrl = process.env.NODE_ENV === 'development' 
-        ? '/api/chat/chat-real' 
-        : '/.netlify/functions/chat';
+      const apiUrl = '/api/chat/chat-real';
 
       // Set a timeout for the fetch request
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 55000); // 55 seconds
+      const timeoutId = setTimeout(() => controller.abort(), 100000); // 100 seconds to match API timeout
 
       // Call the chat API endpoint
       const response = await fetch(apiUrl, {
@@ -479,7 +476,7 @@ Ask me about smoke plume dispersion, wildfire risk assessment, atmospheric condi
             </div>
             <div>
               <div className="text-lg font-semibold">SMeshLLM</div>
-              <div className="text-xs text-gray-400 font-normal">Stanford's WildFire GPT Algorithm</div>
+              <div className="text-xs text-gray-400 font-normal">Stanford&apos;s WildFire GPT Algorithm</div>
             </div>
           </CardTitle>
         </CardHeader>
@@ -539,7 +536,7 @@ Ask me about smoke plume dispersion, wildfire risk assessment, atmospheric condi
                     </div>
                   )}
                   
-                  <div className="mt-2 text-xs text-gray-500">
+                  <div className="mt-2 text-xs text-gray-500" suppressHydrationWarning>
                     {message.timestamp.toLocaleTimeString()}
                   </div>
                 </div>

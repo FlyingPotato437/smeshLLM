@@ -70,12 +70,14 @@ export async function POST(request: NextRequest) {
     try {
       const mappedReadings: any[] = csvData.slice(0, 1000) // safety limit
         .map((row: any) => {
-          const sensorId = row.sensor_id || row.from_node || 'csv-import';
+          const sensorId = row.sensor_id || row.from_node || row.fromNode || 'csv-import';
+          const latitude = parseFloat(row.latitude || row.lat || 37.4275);
+          const longitude = parseFloat(row.longitude || row.lon || row.lng || -122.1697);
           return {
             // Mandatory fields for `pi_sensor_raw` table
             sensor_uuid: sensorIdToUUID(sensorId),
             ts: row.timestamp || row.datetime || row.date || new Date().toISOString(),
-            location: `POINT(${row.longitude || row.lon || 0} ${row.latitude || row.lat || 0})`,
+            location: `POINT(${Number.isFinite(longitude) ? longitude : -122.1697} ${Number.isFinite(latitude) ? latitude : 37.4275})`,
             altitude_m: parseFloat(row.altitude_m || row.elevation || 0),
             pm25_ug_m3: parseFloat(row.pm25_ugm3 || row.pm25 || row.pm25Standard || 0),
             pm10_ug_m3: parseFloat(row.pm10_ugm3 || row.pm10 || row.pm10Standard || 0),

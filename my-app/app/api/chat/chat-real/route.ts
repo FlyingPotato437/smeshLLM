@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { processWildFireGPTChat } from '@/lib/ai/smesh-llm';
 import { extractLocationFromQuery, fallbackExtractLocation } from '@/lib/ai/location-extractor';
+import { isLikelyLocationCandidate } from '@/lib/ai/location-heuristics';
 
 // Vercel serverless function configuration (App Router)
 export const maxDuration = 60;
@@ -174,6 +175,8 @@ if (!extractedLocation && message) {
           };
           console.log(`📍 Direct coordinates extracted: ${extractedLocation.lat}, ${extractedLocation.lng}`);
         }
+      } else if (!isLikelyLocationCandidate(message, locationData.location)) {
+        console.log(`⚠️ Rejecting low-confidence AI location candidate: ${locationData.location}`);
       } else {
         extractedLocation = await geocodeLocation(locationData.location) || undefined;
       }
@@ -201,6 +204,8 @@ if (!extractedLocation && message) {
             };
             console.log(`📍 Direct coordinates extracted from fallback: ${extractedLocation.lat}, ${extractedLocation.lng}`);
           }
+        } else if (!isLikelyLocationCandidate(message, fallbackData.location)) {
+          console.log(`⚠️ Rejecting low-confidence fallback location candidate: ${fallbackData.location}`);
         } else {
           extractedLocation = await geocodeLocation(fallbackData.location) || undefined;
         }
@@ -251,9 +256,9 @@ if (!extractedLocation && message) {
     
     console.log(`📍 Location: ${locationInfo}`);
 
-    // Track what services were actually used
-    const actualServicesUsed: string[] = [];
-    const actualDataSources: string[] = [];
+    // Track services conservatively (no keyword-based inference)
+    const actualServicesUsed: string[] = ['WildFireGPT Algorithm', 'Gemini 2.5 Pro'];
+    const actualDataSources: string[] = ['Real upstream services only (no synthetic fallback values)'];
     
     console.log('🔍 Starting real service tracking...');
     
@@ -269,10 +274,6 @@ if (!extractedLocation && message) {
       timeoutPromise
     ]) as string;
     
-    // Mark services used conservatively
-    actualServicesUsed.push('WildFireGPT Algorithm', 'Gemini 2.5 Pro');
-    // Only add data source markers when message intent implies a real call path
-    
     // If we have a location, use it for spatial context
     if (extractedLocation) {
       const locationContext = {
@@ -283,29 +284,6 @@ if (!extractedLocation && message) {
       // Note: The location is already included in the message metadata
       // and will be used by the chat interface for spatial search
     }
-
-    // Determine what services would actually be called based on query
-    const lowerMessage = message.toLowerCase();
-    
-    if (lowerMessage.includes('literature') || lowerMessage.includes('research') || lowerMessage.includes('study')) {
-      actualServicesUsed.push('RAG Scientific Literature Search (ArXiv API)');
-      actualDataSources.push('Real Scientific Literature via ArXiv');
-    }
-    
-    if (lowerMessage.includes('trajectory') || lowerMessage.includes('dispersion') || lowerMessage.includes('hysplit')) {
-      actualServicesUsed.push('HYSPLIT Atmospheric Dispersion Model');
-      actualDataSources.push('Real Atmospheric Physics Modeling');
-    }
-    
-    if (lowerMessage.includes('air quality') || lowerMessage.includes('pm2.5') || lowerMessage.includes('pollution')) {
-      actualServicesUsed.push('OpenAQ Global Air Quality API');
-      actualDataSources.push('Real Global Air Quality Network');
-    }
-    
-    // Always include database and LLM
-    actualServicesUsed.push('Gemini 2.5 Pro Language Model');
-    actualDataSources.push('Supabase Sensor Database');
-    actualDataSources.push('Intelligent Query Analysis');
 
     const processingTime = Date.now() - startTime;
 
@@ -319,7 +297,7 @@ if (!extractedLocation && message) {
       sessionId: currentSessionId,
       dataSourcesUsed: actualDataSources,
       servicesInvoked: actualServicesUsed,
-      realData: actualServicesUsed.length > 1, // Real if more than just LLM
+      realData: true,
       processingTime
     };
 

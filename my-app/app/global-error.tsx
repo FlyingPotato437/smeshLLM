@@ -15,7 +15,7 @@ export default function GlobalError({
             <h1 className="text-6xl font-bold text-gray-800 mb-4">Oops!</h1>
             <h2 className="text-2xl font-semibold text-gray-600 mb-4">Something went wrong</h2>
             <p className="text-gray-500 mb-8">
-              We're sorry, but something unexpected happened.
+              We&apos;re sorry, but something unexpected happened.
             </p>
             <button
               onClick={reset}
@@ -23,12 +23,12 @@ export default function GlobalError({
             >
               Try Again
             </button>
-            <a
-              href="/"
+            <button
+              onClick={() => { window.location.href = '/'; }}
               className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded"
             >
               Go Home
-            </a>
+            </button>
           </div>
         </div>
       </body>

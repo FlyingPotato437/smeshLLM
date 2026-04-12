@@ -5,6 +5,8 @@ import { Navigation } from '@/components/layout/navigation';
 import { AnimatedBackground } from '@/components/ui/animated-background';
 import { motion } from 'framer-motion';
 import { Map, Zap, Activity, Wind, Gauge, MessageSquare } from 'lucide-react';
+import { SmokePlume3DViewer } from '@/components/visualization/smoke-plume-3d-viewer';
+import { buildLayerDataFromCsv } from '@/lib/utils/air-quality-sample';
 
 // Fetch real data from APIs
 async function fetchPlumeData() {
@@ -17,9 +19,13 @@ async function fetchPlumeData() {
       return result.data.map((point: any) => ({
         position: [point.longitude, point.latitude, point.altitude_m] as [number, number, number],
         concentration: point.conc_pm25_ug_m3,
+        pm25: point.conc_pm25_ug_m3,
+        pm10: point.conc_pm10_ug_m3,
+        pm1: point.conc_pm1_ug_m3 ?? (point.conc_pm25_ug_m3 || 0) * 0.7,
         uncertainty: 2.1, // TODO: Add uncertainty field to API
         timestamp: new Date(point.prediction_ts),
-        source: point.model_version?.includes('AI') ? 'ai_enhanced' : 'hysplit' as const
+        source: point.model_version?.includes('AI') ? 'ai_enhanced' : 'hysplit' as const,
+        layerType: 'smoke' as const,
       }));
     }
   } catch (error) {
@@ -32,71 +38,60 @@ async function fetchPlumeData() {
     {
       position: [-122.1430, 37.4419, 100] as [number, number, number],
       concentration: 25.4,
+      pm25: 25.4,
+      pm10: 31.2,
+      pm1: 17.8,
       uncertainty: 2.1,
       timestamp: new Date(),
-      source: 'hysplit' as const
+      source: 'hysplit' as const,
+      layerType: 'smoke' as const,
     },
     {
       position: [-122.1530, 37.4519, 150] as [number, number, number],
       concentration: 18.7,
+      pm25: 18.7,
+      pm10: 24.1,
+      pm1: 13.1,
       uncertainty: 1.8,
       timestamp: new Date(),
-      source: 'ai_enhanced' as const
+      source: 'ai_enhanced' as const,
+      layerType: 'smoke' as const,
     },
     {
       position: [-122.1330, 37.4319, 200] as [number, number, number],
       concentration: 32.1,
+      pm25: 32.1,
+      pm10: 41.7,
+      pm1: 22.5,
       uncertainty: 3.2,
       timestamp: new Date(),
-      source: 'hysplit' as const
+      source: 'hysplit' as const,
+      layerType: 'smoke' as const,
     },
     {
       position: [-122.1630, 37.4219, 120] as [number, number, number],
       concentration: 45.8,
+      pm25: 45.8,
+      pm10: 59.1,
+      pm1: 32.1,
       uncertainty: 4.1,
       timestamp: new Date(),
-      source: 'ai_enhanced' as const
+      source: 'ai_enhanced' as const,
+      layerType: 'smoke' as const,
     },
     {
       position: [-122.1230, 37.4519, 180] as [number, number, number],
       concentration: 12.3,
+      pm25: 12.3,
+      pm10: 16.0,
+      pm1: 8.6,
       uncertainty: 1.2,
       timestamp: new Date(),
-      source: 'hysplit' as const
+      source: 'hysplit' as const,
+      layerType: 'smoke' as const,
     }
   ];
 }
-
-const sampleSensorData = [
-  {
-    id: 'stanford-sensor-1',
-    position: [-122.1430, 37.4419, 10] as [number, number, number],
-    pm25: 15.3,
-    status: 'active' as const,
-    lastUpdate: new Date()
-  },
-  {
-    id: 'palo-alto-sensor-2',
-    position: [-122.1530, 37.4519, 10] as [number, number, number],
-    pm25: 22.1,
-    status: 'active' as const,
-    lastUpdate: new Date()
-  },
-  {
-    id: 'menlo-park-sensor-3',
-    position: [-122.1830, 37.4719, 10] as [number, number, number],
-    pm25: 8.7,
-    status: 'active' as const,
-    lastUpdate: new Date()
-  },
-  {
-    id: 'mountain-view-sensor-4',
-    position: [-122.0830, 37.3919, 10] as [number, number, number],
-    pm25: 19.2,
-    status: 'inactive' as const,
-    lastUpdate: new Date(Date.now() - 30 * 60 * 1000) // 30 minutes ago
-  }
-];
 
 const samplePrescribedBurns = [
   {
@@ -135,16 +130,19 @@ const samplePrescribedBurns = [
   }
 ];
 
-const sampleMeteorologicalData = {
+const fallbackMeteorologicalData = {
   windSpeed: 12.5, // m/s
   windDirection: 245, // degrees
   temperature: 297.15, // Kelvin (24°C)
   humidity: 65, // percentage
+  pressure: 1012,
   mixingHeight: 850 // meters
 };
 
 export default function VisualizationPage() {
   const [concentrationData, setConcentrationData] = useState<any[]>([]);
+  const [sampleSensorData, setSampleSensorData] = useState<any[]>([]);
+  const [sampleMeteorologicalData, setSampleMeteorologicalData] = useState<any>(fallbackMeteorologicalData);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -160,6 +158,23 @@ export default function VisualizationPage() {
     // Refresh data every 5 minutes
     const interval = setInterval(loadData, 5 * 60 * 1000);
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const loadSampleLayerData = async () => {
+      try {
+        const response = await fetch('/sample-air-quality-data.csv');
+        if (!response.ok) return;
+        const csvText = await response.text();
+        const parsed = buildLayerDataFromCsv(csvText);
+        setSampleSensorData(parsed.sensors);
+        setSampleMeteorologicalData(parsed.meteorology);
+      } catch (error) {
+        console.error('Failed to load sample CSV data:', error);
+      }
+    };
+
+    loadSampleLayerData();
   }, []);
 
   return (
@@ -320,17 +335,13 @@ export default function VisualizationPage() {
                 </div>
                 
                 <div className="h-[600px]">
-                  <div className="w-full h-full flex items-center justify-center text-gray-400 bg-[#151515] border border-dashed border-gray-600">
-                    <div className="text-center max-w-xl px-6">
-                      <h4 className="text-lg font-semibold text-white mb-3">
-                        Interactive 3D plume map is temporarily disabled
-                      </h4>
-                      <p className="text-sm leading-relaxed">
-                        This production build excludes Deck.gl rendering to prevent dependency/version build failures.
-                        Prediction data and monitoring workflows remain available.
-                      </p>
-                    </div>
-                  </div>
+                  <SmokePlume3DViewer
+                    concentrationData={concentrationData}
+                    sensorData={sampleSensorData}
+                    prescribedBurns={samplePrescribedBurns as any}
+                    meteorologicalData={sampleMeteorologicalData}
+                    className="w-full h-full"
+                  />
                 </div>
               </motion.div>
 
@@ -383,7 +394,9 @@ export default function VisualizationPage() {
                     <div className="flex justify-between">
                       <span className="text-gray-400">Avg PM2.5:</span>
                       <span className="text-white">
-                        {(sampleSensorData.reduce((acc, s) => acc + s.pm25, 0) / sampleSensorData.length).toFixed(1)} μg/m³
+                        {(sampleSensorData.length
+                          ? sampleSensorData.reduce((acc, s) => acc + (s.pm25 || 0), 0) / sampleSensorData.length
+                          : 0).toFixed(1)} μg/m³
                       </span>
                     </div>
                     <div className="flex justify-between">

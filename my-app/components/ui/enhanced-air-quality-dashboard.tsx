@@ -36,6 +36,7 @@ import {
   BarChart3,
   Grid3X3
 } from 'lucide-react'
+import { buildLayerDataFromCsv } from '@/lib/utils/air-quality-sample'
 
 // Dynamically import the map component to avoid SSR issues
 const InteractiveMap = dynamic(() => import('./interactive-map'), { 
@@ -200,7 +201,7 @@ const UploadDataPrompt: React.FC<{ onFileUpload: (file: File) => void; isUploadi
                   Drag and drop your CSV file here, or click to browse
                 </p>
                 <p className="text-sm text-gray-500 mb-4">
-                  Expected format: timestamp, location, latitude, longitude, pm25, pm10, no2, o3, co, so2, aqi, temperature, humidity, windSpeed
+                  Expected format: datetime, fromNode, pm10Standard, pm25Standard, pm100Standard, pm10Environmental, pm25Environmental, pm100Environmental, rxSnr, rxRssi, rxTime, hopStart, hopLimit
                 </p>
                 <Button
                   onClick={() => fileInputRef.current?.click()}
@@ -222,8 +223,8 @@ const UploadDataPrompt: React.FC<{ onFileUpload: (file: File) => void; isUploadi
             <div className="bg-[#2a2a2a] rounded-lg p-4">
               <h3 className="text-lg font-semibold text-white mb-2">Sample Data Format</h3>
               <div className="bg-[#111111] rounded p-3 font-mono text-sm text-gray-300 overflow-x-auto">
-                <div>timestamp,location,latitude,longitude,pm25,pm10,no2,o3,co,so2,aqi,temperature,humidity,windSpeed</div>
-                <div>2024-01-01T00:00:00Z,Station1,37.7749,-122.4194,25.5,35.2,18.1,45.3,1.2,5.8,75,22.1,65.5,3.2</div>
+                <div>datetime,fromNode,pm10Standard,pm25Standard,pm100Standard,pm10Environmental,pm25Environmental,pm100Environmental,rxSnr,rxRssi,rxTime,hopStart,hopLimit</div>
+                <div>2026-01-25 13:59:00.437537,0x433abf20,4,6,6,4,6,6,5.5,-87,,3,3</div>
               </div>
             </div>
 
@@ -292,6 +293,39 @@ const EnhancedAirQualityDashboard: React.FC = () => {
       const text = await file.text()
       const lines = text.split('\n')
       const headers = lines[0].split(',').map(h => h.trim().toLowerCase())
+
+      const isMeshtasticFormat = headers.includes('fromnode') || headers.includes('from_node')
+      if (isMeshtasticFormat) {
+        const mapped = buildLayerDataFromCsv(text)
+        const parsedData: AirQualityData[] = mapped.smokePoints.map((point, index) => ({
+          id: `uploaded-${index}`,
+          timestamp: point.timestamp,
+          location: `Sensor ${(index % Math.max(1, mapped.sensors.length)) + 1}`,
+          latitude: point.position[1],
+          longitude: point.position[0],
+          pm25: point.pm25 ?? point.concentration ?? 0,
+          pm10: point.pm10 ?? 0,
+          no2: 0,
+          o3: 0,
+          co: 0,
+          so2: 0,
+          aqi: Math.round((point.pm25 ?? point.concentration ?? 0) * 2),
+          temperature: mapped.meteorology.temperature - 273.15,
+          humidity: mapped.meteorology.humidity,
+          windSpeed: mapped.meteorology.windSpeed
+        }))
+
+        if (parsedData.length === 0) {
+          throw new Error('No valid rows found in Meshtastic-format CSV.')
+        }
+
+        setData(parsedData)
+        setHasUploadedData(true)
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('uploadedAirQualityData', JSON.stringify(parsedData))
+        }
+        return
+      }
       
       const requiredFields = ['timestamp', 'location', 'latitude', 'longitude', 'pm25', 'aqi']
       const missingFields = requiredFields.filter(field => 

@@ -108,8 +108,10 @@ export class OpenAQService {
   private readonly apiBaseUrl: string;
   
   constructor() {
-    // Updated to use unified server on port 8000
-    this.apiBaseUrl = process.env.OPENAQ_SERVICE_URL || 'http://127.0.0.1:8000';
+    this.apiBaseUrl =
+      process.env.OPENAQ_SERVICE_URL ||
+      process.env.PYTHON_SERVICE_URL ||
+      'http://127.0.0.1:8000';
   }
 
   /**
@@ -253,85 +255,16 @@ export class OpenAQService {
       };
       
     } catch (error) {
-      console.log('⚠️ OpenAQ: Python service unavailable, using fallback data');
-      // Provide realistic fallback air quality data for California Bay Area
+      console.log('⚠️ OpenAQ: Python service unavailable - real measurements unavailable');
       return {
         centerCoordinates: { latitude, longitude },
         searchRadiusKm: options?.radiusKm || 50,
         timeRangeHours: options?.hoursBack || 24,
         parameters: options?.parameters || ['pm25', 'pm10'],
-        measurementsFound: 12,
-        locationsFound: 3,
-        measurements: [
-          {
-            parameter: 'pm25',
-            value: 18.5,
-            unit: 'µg/m³',
-            timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(), // 30 min ago
-            locationName: 'Fremont Station',
-            locationId: 'fallback-fremont-1',
-            country: 'US',
-            city: 'Fremont',
-            latitude: latitude + 0.01,
-            longitude: longitude + 0.01,
-            coordinates: { latitude: latitude + 0.01, longitude: longitude + 0.01 },
-            sourceName: 'FALLBACK_BAAQMD'
-          },
-          {
-            parameter: 'pm10',
-            value: 32.8,
-            unit: 'µg/m³',
-            timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-            locationName: 'Fremont Station',
-            locationId: 'fallback-fremont-1',
-            country: 'US',
-            city: 'Fremont',
-            latitude: latitude + 0.01,
-            longitude: longitude + 0.01,
-            coordinates: { latitude: latitude + 0.01, longitude: longitude + 0.01 },
-            sourceName: 'FALLBACK_BAAQMD'
-          },
-          {
-            parameter: 'pm25',
-            value: 22.1,
-            unit: 'µg/m³',
-            timestamp: new Date(Date.now() - 1000 * 60 * 60).toISOString(), // 1 hour ago
-            locationName: 'Dublin Monitor',
-            locationId: 'fallback-dublin-1',
-            country: 'US',
-            city: 'Dublin',
-            latitude: latitude + 0.05,
-            longitude: longitude - 0.02,
-            coordinates: { latitude: latitude + 0.05, longitude: longitude - 0.02 },
-            sourceName: 'FALLBACK_BAAQMD'
-          }
-        ],
-        locations: [
-          {
-            locationId: 'fallback-fremont-1',
-            name: 'Fremont Station',
-            latitude: latitude + 0.01,
-            longitude: longitude + 0.01,
-            country: 'US',
-            city: 'Fremont',
-            sourceName: 'FALLBACK_BAAQMD',
-            firstUpdated: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-            lastUpdated: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-            parameters: ['pm25', 'pm10']
-          },
-          {
-            locationId: 'fallback-dublin-1', 
-            name: 'Dublin Monitor',
-            latitude: latitude + 0.05,
-            longitude: longitude - 0.02,
-            country: 'US',
-            city: 'Dublin',
-            sourceName: 'FALLBACK_BAAQMD',
-            firstUpdated: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-            lastUpdated: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
-            parameters: ['pm25', 'pm10']
-          }
-        ]
+        measurementsFound: 0,
+        locationsFound: 0,
+        measurements: [],
+        locations: []
       };
     }
   }

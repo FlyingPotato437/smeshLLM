@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
+const path = require('path');
+
 const nextConfig = {
   serverExternalPackages: ['@supabase/supabase-js'],
+  outputFileTracingRoot: path.join(__dirname),
   // Enable React strict mode
   reactStrictMode: true,
   // Enable server components

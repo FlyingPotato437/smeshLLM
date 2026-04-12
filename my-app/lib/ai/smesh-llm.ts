@@ -22,6 +22,14 @@ import { PINNService } from '../services/pinn-service';
 import { hybridRAGClient, ProcessedHybridData } from '../services/hybrid-rag-service';
 import { supabase } from '../database/supabase';
 import { geocodeLocations } from './geocode-utils';
+import { isLikelyLocationCandidate, isLowSignalMessage } from './location-heuristics';
+
+const PYTHON_SERVICE_BASE_URL =
+  process.env.PYTHON_SERVICE_URL ||
+  process.env.HYSPLIT_SERVICE_URL ||
+  process.env.OPENAQ_SERVICE_URL ||
+  process.env.HYBRID_RAG_SERVICE_URL ||
+  'http://127.0.0.1:8000';
 
 // Initialize Gemini 2.5 Pro client (OpenAI compatibility mode) only on server side
 let geminiClient: OpenAI | null = null;
@@ -219,8 +227,14 @@ export class WildFireGPTAlgorithm {
         !['County', 'State', 'United', 'States', 'America'].includes(location) &&
         location.length > 2
       );
-    const nonLocations = ['What', 'Is', 'The', 'In', 'Risk', 'Wildfire', 'Smoke', 'Fire', 'Air', 'Quality', 'Plume', 'Dispersion', 'Wildfire Risk'];
-    standaloneLocations = standaloneLocations.filter(loc => !nonLocations.some(non => loc.includes(non)));
+    const nonLocations = [
+      'What', 'Is', 'The', 'In', 'Risk', 'Wildfire', 'Smoke', 'Fire', 'Air', 'Quality', 'Plume', 'Dispersion',
+      'Should', 'Use', 'Can', 'Today', 'Now', 'Current', 'Real', 'Data', 'Only', 'Please'
+    ];
+    standaloneLocations = standaloneLocations.filter(loc =>
+      !nonLocations.some(non => loc.includes(non)) &&
+      isLikelyLocationCandidate(userQuery, loc)
+    );
     const fullLocations = [...userQuery.matchAll(locationPattern)].map(match => {
       const city = match[1];
       const county = match[2];
@@ -241,21 +255,23 @@ export class WildFireGPTAlgorithm {
         primaryLocations = [providedLocation, ...standaloneLocations.filter(loc => loc !== providedLocation)];
       } else if (providedLocation && typeof providedLocation === 'object' && 'lat' in providedLocation && 'lng' in providedLocation) {
         preGeocoded = [providedLocation];
+        primaryLocations = [];
       }
     }
 
     const queryType = this.determineQueryType(userQuery, fireKeywords, smokeKeywords);
     
     // Geocode location names to coordinates
-    const geocodedCoordinates = await geocodeLocations(primaryLocations, userQuery);
-    const allCoordinates = [
-      ...coordinates.map(match => ({
+    const geocodedCoordinates = preGeocoded.length > 0
+      ? []
+      : await geocodeLocations(primaryLocations, userQuery);
+    const coordinatesFromText = coordinates.map(match => ({
         lat: parseFloat(match[1]),
         lng: parseFloat(match[2])
-      })),
-      ...geocodedCoordinates,
-      ...preGeocoded
-    ];
+      }));
+    const allCoordinates = preGeocoded.length > 0
+      ? preGeocoded
+      : [...coordinatesFromText, ...geocodedCoordinates];
 
     return {
       queryType,
@@ -433,14 +449,18 @@ export class WildFireGPTAlgorithm {
         let choice = response.choices[0];
         console.log('🤖 LLM Response choice:', choice);
         
-        if (choice.message.tool_calls) {
-            console.log('🔧 Tool calls detected:', choice.message.tool_calls.length);
+        let toolRound = 0;
+        const MAX_TOOL_ROUNDS = 2;
+
+        while (choice.message.tool_calls && toolRound < MAX_TOOL_ROUNDS) {
+            toolRound++;
+            console.log(`🔧 Tool calls detected (round ${toolRound}/${MAX_TOOL_ROUNDS}): ${choice.message.tool_calls.length}`);
             messages.push(choice.message);
 
             for (const toolCall of choice.message.tool_calls) {
                 console.log('🔧 Processing tool call:', toolCall);
                 const toolResult = await this.executeTool(toolCall);
-                console.log('🔧 Tool result:', toolResult);
+                console.log('🔧 Tool result:', typeof toolResult === 'string' ? toolResult.substring(0, 200) : toolResult);
                 messages.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
@@ -449,7 +469,7 @@ export class WildFireGPTAlgorithm {
             }
 
             response = await getGeminiClient().chat.completions.create({
-                model: 'gemini-1.5-pro',
+                model: 'gemini-2.5-pro',
                 messages,
                 tools: this.tools
             });
@@ -705,7 +725,7 @@ export class WildFireGPTAlgorithm {
       
       const results = await Promise.allSettled(queries);
       
-      // Combine real data with intelligent defaults
+      // Return only values supported by retrieved data (no synthetic placeholders)
       return {
         topography: results[0]?.status === 'fulfilled' 
           ? `${results[0].value?.terrain_type || 'varied terrain'} with elevation ${results[0].value?.elevation_m || 'unknown'}m`
@@ -714,9 +734,9 @@ export class WildFireGPTAlgorithm {
           ? `${results[1].value?.cover_type || 'mixed vegetation'} (density: ${results[1].value?.vegetation_density || 'unknown'})`
           : 'land cover data unavailable',
         populationDensity: null, // Would need census data integration
-        infrastructure: ['check local GIS data'], // Would need infrastructure database
-        watersheds: ['geographic query needed'], // Would need watershed database
-        administrativeBoundaries: spatialElements?.administrativeRegion || 'location-based query needed',
+        infrastructure: [],
+        watersheds: [],
+        administrativeBoundaries: spatialElements?.administrativeRegion || null,
         dataSource: 'database_query',
         querySuccess: results.some(r => r.status === 'fulfilled')
       };
@@ -729,7 +749,7 @@ export class WildFireGPTAlgorithm {
         infrastructure: [],
         watersheds: [],
         administrativeBoundaries: 'query failed',
-        dataSource: 'error_fallback',
+        dataSource: 'error_real_only',
         error: error.message
       };
     }
@@ -756,7 +776,7 @@ export class WildFireGPTAlgorithm {
           console.log('🌡️ WEATHER: Fetching context-aware fire weather conditions');
           console.log(`🔍 WEATHER: Analyzing query for scenario detection: "${queryContext}"`);
           
-          const weatherResponse = await fetch('http://127.0.0.1:8000/weather/fire-conditions', {
+          const weatherResponse = await fetch(`${PYTHON_SERVICE_BASE_URL}/weather/fire-conditions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -771,6 +791,9 @@ export class WildFireGPTAlgorithm {
           
           if (weatherResponse.ok) {
             const weatherResult = await weatherResponse.json();
+            if (!weatherResult?.success || !weatherResult?.data?.fire_weather) {
+              throw new Error(weatherResult?.error || 'Weather service returned no usable real-time fire weather payload');
+            }
             environmentalData.fireWeather = weatherResult;
             
             // Use detected scenario from backend analysis
@@ -790,31 +813,20 @@ export class WildFireGPTAlgorithm {
             throw new Error(`Weather service error: ${weatherResponse.status}`);
           }
         } catch (weatherError: any) {
-          console.log('⚠️ WEATHER: Python service unavailable, using fallback data');
-          // Provide realistic fallback weather data for California Bay Area
+          console.log('⚠️ WEATHER: Python service unavailable - real weather data unavailable');
           environmentalData.fireWeather = {
-            data: {
-              fire_weather: {
-                risk_level: 'MODERATE',
-                temperature_f: 72,
-                humidity_percent: 45,
-                wind_speed_mph: 8,
-                wind_direction: 'NW',
-                dry_bulb_temp: 22,
-                relative_humidity: 45,
-                drought_index: 0.3
-              },
-              detected_scenario: 'wildfire_risk_assessment'
-            },
-            message: 'Using fallback weather data (Python service unavailable)',
-            timestamp: new Date().toISOString()
+            available: false,
+            data: null,
+            message: `Real weather service unavailable: ${weatherError?.message || 'unknown error'}`,
+            timestamp: new Date().toISOString(),
+            data_source: 'REAL_SERVICE_UNAVAILABLE'
           };
         }
 
         try {
           // Get basic elevation data  
           console.log('📍 ELEVATION: Fetching basic elevation data');
-          const elevationResponse = await fetch(`http://127.0.0.1:8000/weather/elevation?latitude=${coord.lat}&longitude=${coord.lng}`, {
+          const elevationResponse = await fetch(`${PYTHON_SERVICE_BASE_URL}/weather/elevation?latitude=${coord.lat}&longitude=${coord.lng}`, {
             signal: AbortSignal.timeout(5000)
           });
           
@@ -826,15 +838,13 @@ export class WildFireGPTAlgorithm {
             throw new Error(`Elevation service error: ${elevationResponse.status}`);
           }
         } catch (elevationError: any) {
-          console.log('⚠️ ELEVATION: Python service unavailable, using fallback data');
-          // Provide basic fallback elevation data for California Bay Area
+          console.log('⚠️ ELEVATION: Python service unavailable - real elevation data unavailable');
           environmentalData.topography = {
-            data: {
-              elevation_m: 150, // Typical elevation for Fremont, CA
-              elevation_ft: 492
-            }
+            available: false,
+            data: null,
+            message: `Real elevation service unavailable: ${elevationError?.message || 'unknown error'}`,
+            data_source: 'REAL_SERVICE_UNAVAILABLE'
           };
-          console.log(`📊 ELEVATION: Using fallback elevation: 150m`);
         }
       }
       
@@ -872,8 +882,8 @@ export class WildFireGPTAlgorithm {
       
       // Add basic environmental context (would integrate with weather APIs in production)
       environmentalData.basicWeather = {
-        message: 'Real weather API integration needed for complete environmental data',
-        availableData: 'Air quality from OpenAQ network',
+        message: 'Real data only mode: no synthetic weather defaults are used.',
+        availableData: 'Only verified upstream services are reported',
         coordinates: spatialElements?.coordinates?.[0] || null
       };
       
@@ -884,7 +894,7 @@ export class WildFireGPTAlgorithm {
       return {
         error: 'Environmental data service unavailable',
         message: error.message,
-        dataSource: 'ERROR_FALLBACK'
+        dataSource: 'ERROR_REAL_ONLY'
       };
     }
   }
@@ -1335,7 +1345,7 @@ export class WildFireGPTAlgorithm {
       const coord = spatialElements.coordinates[0];
       
       // Call NASA FIRMS service via our Python API
-      const response = await fetch('http://127.0.0.1:8000/nasa-firms/active-fires', {
+      const response = await fetch(`${PYTHON_SERVICE_BASE_URL}/nasa-firms/active-fires`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1376,50 +1386,22 @@ export class WildFireGPTAlgorithm {
       };
       
     } catch (error) {
-      console.log('⚠️ NASA FIRMS: Python service unavailable, using fallback data');
-      
-      // Use fallback coordinates if coord is not defined
-      const fallbackCoord = spatialElements?.coordinates?.[0] || { lat: 37.5485, lng: -121.9886 }; // Fremont, CA default
-      
-      // Provide realistic fallback fire data for California (typical fire season)
+      console.log('⚠️ NASA FIRMS: Python service unavailable - real fire detections unavailable');
       return {
-        activeFireCount: 2,
-        fires: [
-          {
-            latitude: fallbackCoord.lat + 0.1,
-            longitude: fallbackCoord.lng + 0.1, 
-            brightness: 320.5,
-            confidence: 85,
-            frp: 12.3,
-            acq_date: new Date().toISOString().split('T')[0],
-            acq_time: '1430',
-            satellite: 'N',
-            instrument: 'VIIRS',
-            version: '2.0NRT'
-          },
-          {
-            latitude: fallbackCoord.lat - 0.05,
-            longitude: fallbackCoord.lng - 0.08,
-            brightness: 298.7,
-            confidence: 72,
-            frp: 8.9,
-            acq_date: new Date().toISOString().split('T')[0],
-            acq_time: '1615',
-            satellite: 'N', 
-            instrument: 'VIIRS',
-            version: '2.0NRT'
-          }
-        ],
-        queryInfo: {
-          latitude: fallbackCoord.lat,
-          longitude: fallbackCoord.lng,
-          radius_km: 50,
-          days_back: 1
-        },
-        dataSource: 'FALLBACK_NASA_FIRMS',
-        message: '2 active fires detected within 50km radius (fallback data)',
-        highConfidenceFires: 1,
-        averageConfidence: 78.5
+        activeFireCount: null,
+        fires: [],
+        queryInfo: spatialElements?.coordinates?.[0]
+          ? {
+              latitude: spatialElements.coordinates[0].lat,
+              longitude: spatialElements.coordinates[0].lng,
+              radius_km: 50,
+              days_back: 1
+            }
+          : null,
+        dataSource: 'NASA_FIRMS_UNAVAILABLE',
+        message: `Real NASA FIRMS data unavailable: ${error instanceof Error ? error.message : 'unknown error'}`,
+        highConfidenceFires: null,
+        averageConfidence: null
       };
     }
   }
@@ -1448,7 +1430,7 @@ export class WildFireGPTAlgorithm {
     const longitude = detectedCoords.lng;
 
     let administrativeRegion = 'Unknown Region';
-    let elevation = 150; // Default, to be updated if possible
+    let elevation: number | null = null;
 
     try {
       // Add timeout to prevent hanging on reverse geocoding
@@ -1487,51 +1469,104 @@ export class WildFireGPTAlgorithm {
       },
       spatialRadius: 50, // km
       environmentalFactors: {
-        topography: geospatialData?.topography || 'varied terrain',
-        vegetation: 'oak woodland and grassland',
-        landUse: 'mixed residential and open space',
-        climaticZone: 'Mediterranean'
+        topography: geospatialData?.topography || 'unknown',
+        vegetation: 'unknown',
+        landUse: 'unknown',
+        climaticZone: 'unknown'
       },
       proximityAnalysis: {
-        nearbyPopulation: 125000,
-        criticalInfrastructure: ['Stanford University', 'Highway 101', 'Electrical substations'],
-        sensitiveAreas: ['Jasper Ridge Biological Preserve', 'Residential neighborhoods']
+        nearbyPopulation: null as any,
+        criticalInfrastructure: [],
+        sensitiveAreas: []
       }
     };
   }
 
   private async assessWildfireRisk(spatialContext: SpatialContext, environmentalData: any): Promise<WildfireRiskAssessment> {
+    const fw = this.extractFireWeatherSnapshot(environmentalData);
+    const hasRealFireWeather = !!fw && typeof fw === 'object';
+
+    if (!hasRealFireWeather) {
+      return {
+        fireWeatherIndex: null,
+        windSpeed: null,
+        windDirection: null,
+        humidity: null,
+        temperature: null,
+        droughtIndex: null,
+        fuelMoisture: null,
+        historicalFireProbability: null,
+        dataAvailability: {
+          fireWeather: false,
+          reason: environmentalData?.fireWeather?.message || 'Real fire weather data unavailable'
+        }
+      } as any;
+    }
+
     return {
-      fireWeatherIndex: environmentalData?.fireWeatherIndex || 18.5,
-      windSpeed: environmentalData?.currentWeather?.windSpeed || 12.5,
-      windDirection: environmentalData?.currentWeather?.windDirection || 245,
-      humidity: environmentalData?.currentWeather?.humidity || 45,
-      temperature: environmentalData?.currentWeather?.temperature || 24,
-      droughtIndex: 2.3, // standardized drought index
-      fuelMoisture: 10, // percentage
-      historicalFireProbability: 0.15 // annual probability
-    };
+      fireWeatherIndex: fw.fire_weather_index ?? fw.fosberg_fire_weather_index ?? null,
+      windSpeed: fw.wind_speed_ms ?? null,
+      windDirection: fw.wind_direction_deg ?? null,
+      humidity: fw.relative_humidity_pct ?? null,
+      temperature: fw.temperature_c ?? null,
+      droughtIndex: fw.drought_code ?? null,
+      fuelMoisture: fw.fuel_moisture_code ?? null,
+      historicalFireProbability: null
+    } as any;
   }
 
   private async analyzeSmokeDispersion(spatialContext: SpatialContext, sensorData: any): Promise<SmokeDispersinAnalysis> {
+    const avgPM25 = sensorData?.averagePM25;
+    const avgPM10 = sensorData?.averagePM10;
+    const hasRealSensorData =
+      sensorData &&
+      sensorData.activeSensors > 0 &&
+      typeof avgPM25 === 'number' &&
+      typeof avgPM10 === 'number';
+
+    if (!hasRealSensorData) {
+      return {
+        concentrationPrediction: {
+          pm25: [],
+          pm10: [],
+          spatialDistribution: [],
+          temporalEvolution: []
+        },
+        atmosphericConditions: {
+          mixingHeight: null,
+          stabilityClass: 'unavailable',
+          windDescription: 'Real-time atmospheric inputs unavailable'
+        },
+        uncertaintyQuantification: {
+          modelUncertainty: null,
+          observationalUncertainty: null,
+          propagatedUncertainty: null
+        },
+        dataAvailability: {
+          sensorData: false,
+          reason: 'No live PM sensor data available for dispersion analysis'
+        }
+      } as any;
+    }
+
     return {
       concentrationPrediction: {
-        pm25: [15.3, 18.7, 22.1, 25.4, 19.8], // μg/m³ over time
-        pm10: [28.7, 34.2, 41.6, 47.8, 37.1], // μg/m³ over time
-        spatialDistribution: [[10, 15, 20], [12, 18, 25], [8, 14, 22]], // 2D grid
-        temporalEvolution: [1.0, 1.2, 1.5, 1.8, 1.4] // relative concentration
+        pm25: [avgPM25],
+        pm10: [avgPM10],
+        spatialDistribution: [[avgPM25]],
+        temporalEvolution: [1.0]
       },
       atmosphericConditions: {
-        mixingHeight: 850, // meters
-        stabilityClass: 'slightly unstable',
-        windDescription: 'surface wind conditions from weather service'
+        mixingHeight: null,
+        stabilityClass: 'derived-from-live-sensor-context',
+        windDescription: 'Requires real wind service for directional plume projection'
       },
       uncertaintyQuantification: {
-        modelUncertainty: 0.25,
-        observationalUncertainty: 0.15,
-        propagatedUncertainty: 0.29
+        modelUncertainty: 0.35,
+        observationalUncertainty: 0.2,
+        propagatedUncertainty: 0.4
       }
-    };
+    } as any;
   }
 
   private async runPhysicsInformedModels(
@@ -1724,9 +1759,52 @@ INSTRUCTIONS:
 8. Provide actionable recommendations for fire management
 9. Use clear, professional language suitable for researchers and emergency managers
 10. Always acknowledge data sources and model assumptions
-${hasHybridData ? '11. **ENHANCED ANALYSIS**: Incorporate the hybrid RAG analysis provided above, which combines real sensor data with scientific literature for comprehensive air quality insights' : ''}
+11. REAL-DATA-ONLY POLICY: Never invent values, never use synthetic/fallback numbers, and never infer missing weather/fire/sensor values as if observed.
+12. If required real-time data is unavailable, explicitly say "data unavailable" and limit recommendations to what can be justified by verified sources.
+13. Never claim active-fire counts, FRP, confidence, or weather risk categories unless those exact values are present in the provided context payloads.
+${hasHybridData ? '14. **ENHANCED ANALYSIS**: Incorporate the hybrid RAG analysis provided above, which combines real sensor data with scientific literature for comprehensive air quality insights' : ''}
 
 Format your response as a formal markdown report with sections for Analysis, Key Findings, Recommendations, and Data Sources. Incorporate all available spatial, environmental, and scientific context.${hasHybridData ? ' Pay special attention to the hybrid air quality analysis provided above.' : ''}`;
+  }
+
+  private extractFireWeatherSnapshot(environmentalData: any): {
+    risk_level: string | null;
+    temperature_c: number | null;
+    relative_humidity_pct: number | null;
+    wind_speed_ms: number | null;
+    wind_direction_deg: number | null;
+    fire_weather_index: number | null;
+    drought_code: number | null;
+    fuel_moisture_code: number | null;
+  } | null {
+    const payload = environmentalData?.fireWeather?.data?.fire_weather;
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    const current = payload.current || payload;
+    const analysis = payload.fire_weather_analysis || {};
+    const indices = analysis.fire_weather_indices || {};
+
+    const toNumber = (value: any): number | null => (
+      typeof value === 'number' && Number.isFinite(value) ? value : null
+    );
+
+    return {
+      risk_level: payload.risk_level || analysis.fire_danger_rating || payload.fire_danger_rating || null,
+      temperature_c: toNumber(current.temperature_c ?? current.temperature_2m),
+      relative_humidity_pct: toNumber(current.relative_humidity_pct ?? current.relative_humidity_2m ?? current.humidity_percent),
+      wind_speed_ms: toNumber(current.wind_speed_ms ?? current.wind_speed_10m),
+      wind_direction_deg: toNumber(current.wind_direction_deg ?? current.wind_direction_10m),
+      fire_weather_index: toNumber(
+        indices.canadian_fire_weather_index ??
+        indices.fosberg_fire_weather_index ??
+        payload.fire_weather_index ??
+        payload.fosberg_fire_weather_index
+      ),
+      drought_code: toNumber(indices.canadian_drought_code ?? payload.drought_code),
+      fuel_moisture_code: toNumber(indices.canadian_fine_fuel_moisture_code ?? payload.fuel_moisture_code)
+    };
   }
 
   private formatEnvironmentalData(environmentalData: any): string {
@@ -1736,7 +1814,7 @@ Format your response as a formal markdown report with sections for Analysis, Key
 
     let formatted = '### Environmental & Atmospheric Conditions\n\n';
 
-    const fw = environmentalData.fireWeather?.data?.fire_weather || null;
+    const fw = this.extractFireWeatherSnapshot(environmentalData);
 
     if (fw) {
       if (fw && fw.risk_level) {
@@ -1745,11 +1823,23 @@ Format your response as a formal markdown report with sections for Analysis, Key
       if (fw && fw.temperature_c !== null && fw.temperature_c !== undefined) {
         formatted += `- Temperature: ${fw.temperature_c}°C (${(fw.temperature_c * 9/5 + 32).toFixed(1)}°F)\n`;
       }
-      if (fw && fw.relative_humidity_pct) {
+      if (fw && fw.relative_humidity_pct !== null && fw.relative_humidity_pct !== undefined) {
         formatted += `- Relative Humidity: ${fw.relative_humidity_pct}%\n`;
       }
-      if (fw) {
-        formatted += `- Wind Speed: ${fw.wind_speed_ms} m/s (${(fw.wind_speed_ms * 2.237).toFixed(1)} mph, ${(fw.wind_speed_ms * 3.6).toFixed(1)} km/h)\n- Wind Direction: ${fw.wind_direction_deg}° \n- Fire Weather Index: ${fw.fire_weather_index}/100\n- Drought Code: ${fw.drought_code}\n- Fuel Moisture Code: ${fw.fuel_moisture_code}`;
+      if (typeof fw.wind_speed_ms === 'number') {
+        formatted += `- Wind Speed: ${fw.wind_speed_ms} m/s (${(fw.wind_speed_ms * 2.237).toFixed(1)} mph, ${(fw.wind_speed_ms * 3.6).toFixed(1)} km/h)\n`;
+      }
+      if (typeof fw.wind_direction_deg === 'number') {
+        formatted += `- Wind Direction: ${fw.wind_direction_deg}°\n`;
+      }
+      if (fw.fire_weather_index !== null && fw.fire_weather_index !== undefined) {
+        formatted += `- Fire Weather Index: ${fw.fire_weather_index}/100\n`;
+      }
+      if (fw.drought_code !== null && fw.drought_code !== undefined) {
+        formatted += `- Drought Code: ${fw.drought_code}\n`;
+      }
+      if (fw.fuel_moisture_code !== null && fw.fuel_moisture_code !== undefined) {
+        formatted += `- Fuel Moisture Code: ${fw.fuel_moisture_code}\n`;
       }
 
       // Context-specific risk assessment
@@ -1766,6 +1856,8 @@ Format your response as a formal markdown report with sections for Analysis, Key
           formatted += `\n- RECOMMENDATION: ❌ Unsuitable conditions - do not burn`;
         }
       }
+    } else if (environmentalData.fireWeather && environmentalData.fireWeather.available === false) {
+      formatted += `- Fire weather inputs: **UNAVAILABLE** (${environmentalData.fireWeather.message || 'real service unavailable'})\n`;
     }
     
     // Topographic Data
@@ -1931,7 +2023,7 @@ DATA ROUTING: Selected '${environmentalData.routingDecision}' data source
       console.log(`🔧 Executing tool: ${name} with args:`, args);
       if (name === 'get_wind_direction') {
           try {
-              const response = await fetch('http://127.0.0.1:8000/wind/analysis', {
+              const response = await fetch(`${PYTHON_SERVICE_BASE_URL}/wind/analysis`, {
                   method: 'POST',
                   headers: {
                       'Content-Type': 'application/json'
@@ -1939,7 +2031,8 @@ DATA ROUTING: Selected '${environmentalData.routingDecision}' data source
                   body: JSON.stringify({
                       latitude: args.latitude,
                       longitude: args.longitude
-                  })
+                  }),
+                  signal: AbortSignal.timeout(15000)
               });
               const data = await response.json();
               if (data.success) {
@@ -1968,24 +2061,26 @@ DATA ROUTING: Selected '${environmentalData.routingDecision}' data source
       
       if (name === 'get_fire_weather_conditions') {
           try {
-              const response = await fetch('http://127.0.0.1:8000/weather/fire-conditions', {
+              const response = await fetch(`${PYTHON_SERVICE_BASE_URL}/weather/fire-conditions`, {
                   method: 'POST',
                   headers: {
                       'Content-Type': 'application/json'
                   },
+                  signal: AbortSignal.timeout(15000),
                   body: JSON.stringify({
                       latitude: args.latitude,
                       longitude: args.longitude
                   })
               });
               const data = await response.json();
-              if (data.success) {
+              if (data.success && data?.data?.fire_weather) {
                   const weather = data.data.fire_weather;
                   console.log('✅ Fire weather data retrieved successfully');
                   
                   // Handle different response structures gracefully
-                  const fireWeatherData = weather?.fire_weather || weather;
+                  const fireWeatherData = weather?.fire_weather_analysis || weather?.fire_weather || weather;
                   const currentConditions = weather?.current || weather;
+                  const fireWeatherIndices = fireWeatherData?.fire_weather_indices || {};
                   
                   return JSON.stringify({
                       current_conditions: {
@@ -1997,14 +2092,16 @@ DATA ROUTING: Selected '${environmentalData.routingDecision}' data source
                           precipitation_mm: currentConditions?.precipitation
                       },
                       fire_weather: {
-                          fire_danger_rating: fireWeatherData?.fire_danger_rating || 'moderate',
-                          fosberg_fire_weather_index: fireWeatherData?.fosberg_fire_weather_index || null
+                          risk_level: weather?.risk_level ?? fireWeatherData?.fire_danger_rating ?? null,
+                          fire_danger_rating: fireWeatherData?.fire_danger_rating ?? null,
+                          canadian_fire_weather_index: fireWeatherIndices?.canadian_fire_weather_index ?? null,
+                          fosberg_fire_weather_index: fireWeatherIndices?.fosberg_fire_weather_index ?? fireWeatherData?.fosberg_fire_weather_index ?? null
                       },
-                      data_source: data.data?.data_source || 'Python backend service'
+                      data_source: data.data?.data_source || currentConditions?.data_source || null
                   });
               } else {
                   console.log('❌ Fire weather API error:', data.error);
-                  return 'Error fetching fire weather data: ' + data.error;
+                  return 'Error fetching fire weather data: ' + (data.error || 'Unknown fire weather service error');
               }
           } catch (error) {
               console.log('❌ Fire weather API exception:', error);
@@ -2014,7 +2111,7 @@ DATA ROUTING: Selected '${environmentalData.routingDecision}' data source
       
       if (name === 'get_integrated_wildfire_analysis') {
           try {
-              const response = await fetch('http://127.0.0.1:8000/fusion/fast-analysis', {
+              const response = await fetch(`${PYTHON_SERVICE_BASE_URL}/fusion/fast-analysis`, {
                   method: 'POST',
                   headers: {
                       'Content-Type': 'application/json'
@@ -2022,7 +2119,8 @@ DATA ROUTING: Selected '${environmentalData.routingDecision}' data source
                   body: JSON.stringify({
                       latitude: args.latitude,
                       longitude: args.longitude
-                  })
+                  }),
+                  signal: AbortSignal.timeout(15000)
               });
               const data = await response.json();
               if (data.success) {
@@ -2046,7 +2144,7 @@ DATA ROUTING: Selected '${environmentalData.routingDecision}' data source
       
       if (name === 'get_active_fires') {
           try {
-              const response = await fetch('http://127.0.0.1:8000/fires/nasa-firms', {
+              const response = await fetch(`${PYTHON_SERVICE_BASE_URL}/nasa-firms/active-fires`, {
                   method: 'POST',
                   headers: {
                       'Content-Type': 'application/json'
@@ -2056,7 +2154,8 @@ DATA ROUTING: Selected '${environmentalData.routingDecision}' data source
                       longitude: args.longitude,
                       radius_km: args.radius_km || 50,
                       days_back: args.days_back || 7
-                  })
+                  }),
+                  signal: AbortSignal.timeout(15000)
               });
               
               const data = await response.json();
@@ -2065,7 +2164,7 @@ DATA ROUTING: Selected '${environmentalData.routingDecision}' data source
                   return JSON.stringify({
                       fire_count: data.data.fire_count,
                       fires: data.data.fires,
-                      search_params: data.data.search_params,
+                      query_info: data.data.query_info,
                       data_source: data.data.data_source || 'NASA FIRMS VIIRS_SNPP_NRT'
                   });
               } else {
@@ -2080,7 +2179,7 @@ DATA ROUTING: Selected '${environmentalData.routingDecision}' data source
       
       if (name === 'get_vegetation_fuel_data') {
           try {
-              const response = await fetch('http://127.0.0.1:8000/vegetation/fuel-model', {
+              const response = await fetch(`${PYTHON_SERVICE_BASE_URL}/vegetation/fuel-model`, {
                   method: 'POST',
                   headers: {
                       'Content-Type': 'application/json'
@@ -2088,7 +2187,8 @@ DATA ROUTING: Selected '${environmentalData.routingDecision}' data source
                   body: JSON.stringify({
                       latitude: args.latitude,
                       longitude: args.longitude
-                  })
+                  }),
+                  signal: AbortSignal.timeout(15000)
               });
               
               const data = await response.json();
@@ -2158,21 +2258,30 @@ SMeshLLM is temporarily offline for critical updates.
     'sensorData': SENSOR_DATA_MIGRATION_PHASE === '3' ? '✅ Unified sensor data' : 
                  SENSOR_DATA_MIGRATION_PHASE === '2' ? '⚠️ Shadow validation mode' : 
                  '✅ Legacy sensor data (uploaded_data + meshtastic_telemetry)',
-    'geospatialData': '✅ PostGIS database queries + real elevation data',
-    'environmentalData': '✅ Context-aware fire analysis + real-time weather (prescribed vs wildfire modes)',
-    'fireDetection': '✅ NASA FIRMS satellite integration (real-time)',
-    'hysplitModels': '✅ HYSPLIT atmospheric physics integration (enhanced scenarios)'
+    'geospatialData': '✅ PostGIS database queries + real elevation data (if service reachable)',
+    'environmentalData': '✅ Real-only weather integration (no synthetic fallback)',
+    'fireDetection': '✅ Real-only NASA FIRMS integration (no synthetic fallback)',
+    'hysplitModels': '✅ Real-only HYSPLIT integration (no synthetic fallback)'
   };
   
   console.log('SmeshLLM Data Status:', dataStatus);
 
   const algorithm = new WildFireGPTAlgorithm();
+  const hasValidProvidedCoordinates =
+    typeof providedLocation === 'object' &&
+    !!providedLocation &&
+    typeof providedLocation.lat === 'number' &&
+    typeof providedLocation.lng === 'number';
   
   try {
     // Create a processing promise
     const processingPromise = (async () => {
     // Step 1: Assess query and extract spatial context
     const assessment = await algorithm.assessQuery(message, providedLocation);
+
+    if (!hasValidProvidedCoordinates && assessment.spatialElements.coordinates.length === 0) {
+      return buildLocationPromptResponse(message);
+    }
     
     // Step 2: Retrieve contextual data based on query needs
     const retrievedData = await algorithm.retrieveContextualData(assessment, message);
@@ -2235,6 +2344,26 @@ Error details: ${error instanceof Error ? error.message : 'Unknown error'}`;
 
 // Legacy export for backwards compatibility
 export const processSmeshLLMChat = processWildFireGPTChat;
+
+function buildLocationPromptResponse(message: string): string {
+  if (isLowSignalMessage(message)) {
+    return `Hello, I am SMeshLLM, Stanford University's AI system for wildfire smoke plume prediction and management.
+
+I can help with smoke dispersion, fire weather, active fire detection, air quality, and location-based wildfire risk analysis.
+
+Please send a location to get started, for example:
+- "Smoke outlook for Sacramento, CA"
+- "Fire risk near 37.44, -122.14"
+- "Air quality in Denver today"`;
+  }
+
+  return `I need a specific location before I can run spatial analysis.
+
+Please include a city, region, or latitude/longitude in your request, for example:
+- "Smoke outlook for Sacramento, CA"
+- "Fire weather near Lake Tahoe"
+- "Air quality at 37.44, -122.14"`;
+}
 
 export class SmeshLLM {
   private supabase;

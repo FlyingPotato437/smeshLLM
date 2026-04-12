@@ -26,19 +26,44 @@ import { getSmoothAQIColor, getAQILevel, EPA_AQI_LEVELS } from "@/lib/utils";
 interface ConcentrationPoint {
   position: [number, number, number]; // [lon, lat, elevation]
   concentration: number; // μg/m³
+  pm25?: number;
+  pm10?: number;
+  pm1?: number;
   uncertainty: number;
   timestamp: Date;
   source: 'hysplit' | 'ai_enhanced';
   velocity?: [number, number, number];
   temperature?: number;
+  layerType?: 'smoke';
 }
 
 interface SensorData {
   id: string;
+  sensorName?: string;
   position: [number, number, number];
+  pm1?: number;
   pm25: number;
+  pm10?: number;
+  pm100?: number;
   status: 'active' | 'inactive';
   lastUpdate: Date;
+  bme?: {
+    temperatureC?: number;
+    humidityPct?: number;
+    pressureHpa?: number;
+  };
+  battery?: {
+    percent?: number;
+    voltage?: number;
+  };
+  electronics?: {
+    rxSnr?: number;
+    rxRssi?: number;
+    rxTime?: number;
+    hopStart?: number;
+    hopLimit?: number;
+  };
+  layerType?: 'sensor';
 }
 
 interface PrescribedBurn {
@@ -55,6 +80,7 @@ interface MeteorologicalData {
   windDirection: number;
   temperature: number;
   humidity: number;
+  pressure?: number;
   mixingHeight: number;
 }
 
@@ -88,17 +114,18 @@ function SmokePlume3DViewerInternal({
 
   // Add states before existing states
   const [concentrationData, setConcentrationData] = useState<ConcentrationPoint[]>(initialConcentrationData || [
-    { position: [-122.1430, 37.4419, 100], concentration: 50, uncertainty: 5, timestamp: new Date(), source: 'hysplit' },
-    { position: [-122.1400, 37.4400, 200], concentration: 80, uncertainty: 8, timestamp: new Date(), source: 'ai_enhanced' },
+    { position: [-122.1430, 37.4419, 100], concentration: 50, pm25: 50, pm10: 65, pm1: 35, uncertainty: 5, timestamp: new Date(), source: 'hysplit', layerType: 'smoke' },
+    { position: [-122.1400, 37.4400, 200], concentration: 80, pm25: 80, pm10: 104, pm1: 56, uncertainty: 8, timestamp: new Date(), source: 'ai_enhanced', layerType: 'smoke' },
     // Add more points for a visible plume
-    { position: [-122.1450, 37.4430, 300], concentration: 120, uncertainty: 10, timestamp: new Date(), source: 'hysplit' },
-    { position: [-122.1420, 37.4420, 400], concentration: 150, uncertainty: 12, timestamp: new Date(), source: 'ai_enhanced' },
+    { position: [-122.1450, 37.4430, 300], concentration: 120, pm25: 120, pm10: 156, pm1: 84, uncertainty: 10, timestamp: new Date(), source: 'hysplit', layerType: 'smoke' },
+    { position: [-122.1420, 37.4420, 400], concentration: 150, pm25: 150, pm10: 195, pm1: 105, uncertainty: 12, timestamp: new Date(), source: 'ai_enhanced', layerType: 'smoke' },
   ]);
   const [meteorologicalData, setMeteorologicalData] = useState<MeteorologicalData>(initialMeteorologicalData || {
     windSpeed: 5.0,
     windDirection: 180,
     temperature: 293.15, // 20°C in Kelvin
     humidity: 60,
+    pressure: 1012,
     mixingHeight: 1000
   });
 
@@ -130,8 +157,6 @@ function SmokePlume3DViewerInternal({
             },
             MapView: coreModule.MapView
           });
-          console.log('✅ Deck.gl components loaded successfully');
-          console.log('📊 Available layers:', Object.keys(layersModule || {}));
           setIsLoading(false);
         }
       } catch (error) {
@@ -149,14 +174,6 @@ function SmokePlume3DViewerInternal({
     };
   }, []);
 
-  // Add useEffect for logging after other useEffects (around line 285):
-  useEffect(() => {
-    console.log('Concentration data length:', concentrationData.length);
-    console.log('Concentration data:', concentrationData);
-  }, [concentrationData]);
-
-  // State management
-  // In viewState initialization, change pitch and zoom:
   const [viewState, setViewState] = useState({
     longitude: -122.1430, // Stanford area
     latitude: 37.4419,   // Stanford area  
@@ -168,20 +185,13 @@ function SmokePlume3DViewerInternal({
     maxPitch: 85
   });
 
-  // Log camera position for debugging
-  useEffect(() => {
-    console.log('📹 Camera ViewState:', viewState);
-    console.log('📍 Looking at coordinates:', `${viewState.latitude.toFixed(4)}, ${viewState.longitude.toFixed(4)}`);
-    console.log('🔍 Zoom level:', viewState.zoom);
-  }, [viewState]);
-
-  // In renderSettings state, change showTerrain to false:
+  // Render settings
   const [renderSettings, setRenderSettings] = useState({
     showTerrain: false,
     showSmoke: true,
     showSensors: true,
+    showMeteorology: true,
     showControls: true,
-    showDataPoints: false, // Debug mode: show individual concentration points
     useRealisticPlumes: false, // Use wind-aware plumes instead of circular heatmaps
     useContinuousPlumes: false, // Use continuous interpolated heatmap plumes
     useEnhancedBlobPlumes: false, // Use enhanced blob-like smoke visualization
@@ -251,7 +261,6 @@ function SmokePlume3DViewerInternal({
 
     // 1. Terrain layer (bottom layer)
     if (renderSettings.showTerrain) {
-      console.log('🏔️ Creating TerrainLayer...');
       try {
         allLayers.push(
           new layers.TerrainLayer({
@@ -272,58 +281,33 @@ function SmokePlume3DViewerInternal({
             opacity: 0.8
           })
         );
-        console.log('✅ TerrainLayer created successfully');
       } catch (error) {
-        console.error('❌ Failed to create TerrainLayer:', error);
+        console.error('Failed to create TerrainLayer:', error);
       }
     }
 
-    // 2. HYSPLIT-based smoke concentration layer (middle layer - above terrain)
+    // 2. Smoke layer - PM2.5, PM10, PM1
     if (renderSettings.showSmoke) {
-      // Calculate current time based on timeline if active
-      const currentTimeForViz = isTimelineActive 
-        ? new Date(Date.now() + (currentForecastHour * 60 * 60 * 1000)) // FORWARD in time for forecast
+      const currentTimeForViz = isTimelineActive
+        ? new Date(Date.now() + (currentForecastHour * 60 * 60 * 1000))
         : new Date();
-      
-      // For timeline mode, show data within a reasonable window around the current forecast time
-      const effectiveTimeWindow = isTimelineActive 
-        ? 120 // Show 2 hours of data around the current forecast time
-        : renderSettings.timeWindowMinutes; // User setting for real-time mode
-        
-      console.log('🌪️ Creating smoke visualization with data:', concentrationData.length, 'points');
-      console.log('🕐 Current time for viz:', currentTimeForViz);
-      console.log('⚙️ Settings:', {
-        timeWindow: effectiveTimeWindow,
-        timelineActive: isTimelineActive,
-        forecastHour: currentForecastHour,
-        altitudeFilter: [renderSettings.altitudeMin, renderSettings.altitudeMax],
-        threshold: renderSettings.concentrationThreshold,
-        useRealisticPlumes: renderSettings.useRealisticPlumes,
-        useContinuousPlumes: renderSettings.useContinuousPlumes
-      });
+
+      const effectiveTimeWindow = isTimelineActive
+        ? 120
+        : renderSettings.timeWindowMinutes;
 
       if (renderSettings.useEnhancedBlobPlumes) {
-        // Use enhanced blob-like smoke visualization for realistic cluster appearance
-        console.log('🌊 Creating EnhancedSmokeBlobLayer for blob-like smoke clusters...');
         try {
           let filteredData = concentrationData.filter(point => {
-            // Filter data for current time window and concentration threshold
             const timeDiff = Math.abs(currentTimeForViz.getTime() - point.timestamp.getTime()) / (1000 * 60);
             return timeDiff <= effectiveTimeWindow && point.concentration >= renderSettings.concentrationThreshold;
           });
 
-          // Performance optimization: limit data points
           if (filteredData.length > renderSettings.maxDataPoints) {
-            // Sort by concentration (highest first) and take top N points
             filteredData = filteredData
               .sort((a, b) => b.concentration - a.concentration)
               .slice(0, renderSettings.maxDataPoints);
-            console.log(`🚀 Performance: Limited to ${renderSettings.maxDataPoints} highest concentration points`);
           }
-
-          console.log('🔍 DEBUG: Filtered data for EnhancedSmokeBlobLayer:', filteredData.length, 'points');
-          console.log('🔍 DEBUG: Sample filtered data:', filteredData.slice(0, 2));
-          console.log('🔍 DEBUG: Concentration threshold:', renderSettings.concentrationThreshold);
           
           // Enhanced blob-specific parameters
           let plumeLength = renderSettings.plumeLength * 1.2; // Longer for better blob formation
@@ -369,30 +353,21 @@ function SmokePlume3DViewerInternal({
             HeatmapLayer: layers.HeatmapLayer,
             ScatterplotLayer: layers.ScatterplotLayer
           }));
-          console.log('✅ EnhancedSmokeBlobLayer created successfully for blob-like smoke visualization');
         } catch (error) {
-          console.error('❌ Failed to create EnhancedSmokeBlobLayer:', error);
+          console.error('Failed to create EnhancedSmokeBlobLayer:', error);
         }
       } else if (renderSettings.useContinuousPlumes) {
-        // Use continuous interpolated heatmap for smooth plume visualization
-        console.log('🌊 Creating ContinuousPlumeLayer for smooth heatmap plumes...');
         try {
           let filteredData = concentrationData.filter(point => {
-            // Filter data for current time window and concentration threshold
             const timeDiff = Math.abs(currentTimeForViz.getTime() - point.timestamp.getTime()) / (1000 * 60);
             return timeDiff <= effectiveTimeWindow && point.concentration >= renderSettings.concentrationThreshold;
           });
 
-          // Performance optimization: limit data points
           if (filteredData.length > renderSettings.maxDataPoints) {
-            // Sort by concentration (highest first) and take top N points
             filteredData = filteredData
               .sort((a, b) => b.concentration - a.concentration)
               .slice(0, renderSettings.maxDataPoints);
-            console.log(`🚀 Performance: Limited to ${renderSettings.maxDataPoints} highest concentration points`);
           }
-
-          // Performance mode adjustments for continuous plumes
           let plumeLength = renderSettings.plumeLength;
           let crossWindSpread = renderSettings.crossWindSpread;
           let gridResolution = renderSettings.gridResolution;
@@ -431,65 +406,55 @@ function SmokePlume3DViewerInternal({
             HeatmapLayer: layers.HeatmapLayer,
             ScatterplotLayer: layers.ScatterplotLayer
           }));
-          console.log('✅ ContinuousPlumeLayer created successfully for smooth plume visualization');
+          // ContinuousPlumeLayer created
         } catch (error) {
-          console.error('❌ Failed to create ContinuousPlumeLayer:', error);
+          console.error('Failed to create ContinuousPlumeLayer:', error);
         }
       } else if (renderSettings.useRealisticPlumes) {
-        // Use wind-aware plume visualization for realistic dispersion
-        console.log('🌪️ Creating WindAwarePlumeLayer...');
         try {
           let filteredData = concentrationData.filter(point => {
-            // Filter data for current time window and concentration threshold
             const timeDiff = Math.abs(currentTimeForViz.getTime() - point.timestamp.getTime()) / (1000 * 60);
             return timeDiff <= effectiveTimeWindow && point.concentration >= renderSettings.concentrationThreshold;
           });
 
-          // Performance optimization: limit data points
           if (filteredData.length > renderSettings.maxDataPoints) {
-            // Sort by concentration (highest first) and take top N points
             filteredData = filteredData
               .sort((a, b) => b.concentration - a.concentration)
               .slice(0, renderSettings.maxDataPoints);
-            console.log(`🚀 Performance: Limited to ${renderSettings.maxDataPoints} highest concentration points`);
           }
 
-          // Performance mode adjustments
           let plumeLength = renderSettings.plumeLength;
           let crossWindSpread = renderSettings.crossWindSpread;
-          
+
           if (renderSettings.performanceMode === 'fast') {
-            plumeLength *= 0.7; // Reduce plume complexity
+            plumeLength *= 0.7;
             crossWindSpread *= 0.7;
           } else if (renderSettings.performanceMode === 'quality') {
-            plumeLength *= 1.2; // Increase detail
+            plumeLength *= 1.2;
             crossWindSpread *= 1.2;
           }
 
           allLayers.push(new WindAwarePlumeLayer({
             id: 'wind-aware-plume-layer',
-            data: filteredData as any, // Type assertion to work with deck.gl props
+            data: filteredData as any,
             meteorologicalData: {
               windSpeed: meteorologicalData.windSpeed,
               windDirection: meteorologicalData.windDirection,
               mixingHeight: meteorologicalData.mixingHeight,
-              atmosphericStability: 'D' as const // Neutral conditions default
+              atmosphericStability: 'D' as const
             },
-            plumeLength: plumeLength,
-            crossWindSpread: crossWindSpread,
+            plumeLength,
+            crossWindSpread,
             opacity: 0.8,
             PolygonLayer: layers.PolygonLayer,
             ScatterplotLayer: layers.ScatterplotLayer
           }));
-          console.log('✅ WindAwarePlumeLayer created successfully');
         } catch (error) {
-          console.error('❌ Failed to create WindAwarePlumeLayer:', error);
+          console.error('Failed to create WindAwarePlumeLayer:', error);
         }
       } else {
-        // Fallback to original circular heatmap approach
-        console.log('🌪️ Creating HysplitSmokeLayer (legacy)...');
         try {
-          allLayers.push(new HysplitSmokeLayer({ 
+          allLayers.push(new HysplitSmokeLayer({
             id: 'hysplit-smoke-layer',
             data: concentrationData as any,
             currentTime: currentTimeForViz,
@@ -498,85 +463,68 @@ function SmokePlume3DViewerInternal({
             concentrationThreshold: renderSettings.concentrationThreshold,
             heatmapRadius: renderSettings.heatmapRadius,
             heatmapIntensity: renderSettings.heatmapIntensity,
-            showDataPoints: false, // Use separate debug layer above
+            showDataPoints: false,
             opacity: 0.9,
             HeatmapLayer: layers.HeatmapLayer,
             ScatterplotLayer: layers.ScatterplotLayer
           }));
-          console.log('✅ HysplitSmokeLayer created successfully');
         } catch (error) {
-          console.error('❌ Failed to create HysplitSmokeLayer:', error);
+          console.error('Failed to create HysplitSmokeLayer:', error);
         }
       }
     }
 
-    // 3. DEBUG: Raw data visualization (above smoke layer)
-    if (renderSettings.showDataPoints) {
-      console.log('🔍 DEBUG MODE: Showing raw data as ScatterplotLayer');
-      console.log('📊 Raw concentration data:', concentrationData.slice(0, 3));
-      console.log('📊 Total data points:', concentrationData.length);
-      
-      try {
-        allLayers.push(new layers.ScatterplotLayer({
-          id: 'debug-raw-data',
-          data: concentrationData,
-          getPosition: (d: ConcentrationPoint) => {
-            return d.position;
-          },
-          getFillColor: [255, 0, 0, 255], // Bright red for visibility
-          getRadius: 2000, // Large radius in meters
-          radiusUnits: 'meters',
-          pickable: true,
-          onHover: (info: any) => {
-            if (info.object) {
-              console.log('🎯 Hovered particle:', info.object);
-            }
-          }
-        }));
-        console.log('✅ Debug ScatterplotLayer created successfully');
-      } catch (error) {
-        console.error('❌ Failed to create debug ScatterplotLayer:', error);
-      }
+    // 3. Meteorological layer - Temperature, Humidity, Pressure
+    if (renderSettings.showMeteorology) {
+      allLayers.push(new layers.ScatterplotLayer({
+        id: 'meteorological-layer',
+        data: [{
+          layerType: 'meteorological',
+          position: [plumeCenter[0], plumeCenter[1], 50],
+          temperatureC: meteorologicalData.temperature - 273.15,
+          humidityPct: meteorologicalData.humidity,
+          pressureHpa: meteorologicalData.pressure ?? 1012,
+          windSpeed: meteorologicalData.windSpeed,
+          windDirection: meteorologicalData.windDirection,
+        }],
+        pickable: true,
+        radiusMinPixels: 10,
+        radiusMaxPixels: 18,
+        getPosition: (d: any) => d.position,
+        getRadius: 16,
+        getFillColor: [56, 189, 248, 240],
+        getLineColor: [255, 255, 255, 255],
+        stroked: true,
+        lineWidthMinPixels: 2,
+      }));
     }
 
-    // 4. Sensor markers (top layer - always visible)
+    // 4. Sensor markers - Name, Status, PM, Electronics
     if (renderSettings.showSensors && initialSensorData.length > 0) {
-      console.log('📡 Creating sensor markers...');
       try {
         allLayers.push(new layers.ScatterplotLayer({
           id: 'sensors',
-          data: initialSensorData,
+          data: initialSensorData.map((sensor) => ({ ...sensor, layerType: 'sensor' as const })),
           pickable: true,
           opacity: 1.0,
           stroked: true,
           filled: true,
-          radiusScale: 1,
-          radiusMinPixels: 12,
-          radiusMaxPixels: 20,
+          radiusUnits: 'pixels',
+          radiusMinPixels: 10,
+          radiusMaxPixels: 26,
           lineWidthMinPixels: 2,
+          billboard: true,
+          parameters: { depthTest: false },
           getPosition: (d: SensorData) => d.position,
-          getRadius: 15,
-          getFillColor: (d: SensorData) => 
+          getRadius: 9,
+          getFillColor: (d: SensorData) =>
             d.status === 'active' ? [0, 255, 0, 255] : [255, 0, 0, 255],
           getLineColor: [255, 255, 255, 255]
         }));
-        console.log('✅ Sensor markers created successfully');
       } catch (error) {
-        console.error('❌ Failed to create sensor markers:', error);
+        console.error('Failed to create sensor markers:', error);
       }
     }
-
-    console.log('Creating deck layers:', allLayers.length);
-    console.log('Layers:', allLayers.map(layer => ({ id: layer.id, type: layer.constructor.name })));
-    console.log('HysplitSmokeLayer props:', { 
-      dataPoints: concentrationData.length, 
-      timeWindowMinutes: renderSettings.timeWindowMinutes,
-      altitudeFilter: [renderSettings.altitudeMin, renderSettings.altitudeMax],
-      concentrationThreshold: renderSettings.concentrationThreshold,
-      heatmapRadius: renderSettings.heatmapRadius
-    });
-    console.log('Plume center:', plumeCenter);
-    console.log('Concentration data sample:', concentrationData.slice(0, 3));
 
     return allLayers;
   }, [
@@ -619,66 +567,40 @@ function SmokePlume3DViewerInternal({
   useEffect(() => {
     const fetchData = async () => {
       try {
-        console.log('🔄 Fetching HYSPLIT data from API...');
         const res = await fetch('/api/plume-predictions');
-        
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        }
-        
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+
         const data = await res.json();
-        console.log('📡 API Response received:', {
-          success: data.success,
-          dataLength: data.data?.length || 0,
-          source: data.source
-        });
-        console.log('📊 Sample API data points:', data.data?.slice(0, 3));
-        
+
         if (data.success && data.data && data.data.length > 0) {
-          console.log('✅ Found real HYSPLIT data, converting format...');
-          // Convert HYSPLIT API format to expected ConcentrationPoint format
-          const convertedData = data.data.map((point: any, index: number) => {
-            const converted = {
-              position: [point.longitude, point.latitude, point.altitude_m],
-              concentration: point.conc_pm25_ug_m3,
-              uncertainty: 5.0,
-              timestamp: new Date(point.prediction_ts),
-              source: point.model_version?.includes('Enhanced') ? 'ai_enhanced' : 'hysplit'
-            };
-            
-            if (index < 3) {
-              console.log(`🔄 Converting API point ${index}:`, {
-                from: point,
-                to: converted
-              });
-            }
-            
-            return converted;
-          });
-          
-          console.log(`✅ Successfully converted ${convertedData.length} concentration points`);
-          console.log('📍 Sample converted data:', convertedData.slice(0, 2));
-          
+          const convertedData = data.data.map((point: any) => ({
+            position: [point.longitude, point.latitude, point.altitude_m],
+            concentration: point.conc_pm25_ug_m3,
+            uncertainty: 5.0,
+            timestamp: new Date(point.prediction_ts),
+            source: point.model_version?.includes('Enhanced') ? 'ai_enhanced' : 'hysplit',
+            pm25: point.conc_pm25_ug_m3,
+            pm10: point.conc_pm10_ug_m3,
+            pm1: point.conc_pm1_ug_m3 ?? (point.conc_pm25_ug_m3 || 0) * 0.7,
+            layerType: 'smoke' as const,
+          }));
           setConcentrationData(convertedData);
-        } else {
-          console.log('⚠️ No real data available from API, keeping existing data');
-          console.log('📊 Current concentration data length:', concentrationData.length);
         }
-        
+
         setMeteorologicalData(data.meteo || {
           windSpeed: 5.0,
           windDirection: 180,
           temperature: 293.15,
           humidity: 60,
+          pressure: 1012,
           mixingHeight: 1000
         });
       } catch (error) {
-        console.error('❌ Failed to fetch live data:', error);
-        console.log('📊 Keeping existing concentration data length:', concentrationData.length);
+        console.error('Failed to fetch live data:', error);
       }
     };
 
-    fetchData(); // Initial fetch
+    fetchData();
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, []);
@@ -777,24 +699,85 @@ function SmokePlume3DViewerInternal({
           onViewStateChange={handleViewStateChange}
           views={new MapView({ repeat: true })}
           getTooltip={({ object }: any) => {
-            if (object) {
-              if (object.concentration !== undefined) {
-                return `PM2.5: ${object.concentration.toFixed(1)} μg/m³\nSource: ${object.source}`;
-              } else if (object.pm25 !== undefined) {
-                return `Sensor: ${object.id}\nPM2.5: ${object.pm25.toFixed(1)} μg/m³\nStatus: ${object.status}`;
-              }
+            if (!object) return null;
+
+            const tooltipStyle = {
+              background: 'rgba(15,15,20,0.95)',
+              color: '#e5e7eb',
+              border: '1px solid rgba(100,100,120,0.4)',
+              borderRadius: '8px',
+              padding: '0',
+              fontSize: '12px',
+              fontFamily: 'system-ui, -apple-system, sans-serif',
+              maxHeight: '280px',
+              overflowY: 'auto',
+              maxWidth: '260px',
+              lineHeight: '1.4',
+              backdropFilter: 'blur(8px)',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+            };
+
+            if (object.layerType === 'sensor' || object.sensorName || object.electronics) {
+              const row = (label: string, value: string) =>
+                `<div style="display:flex;justify-content:space-between;gap:8px"><span style="color:#9ca3af">${label}</span><span style="font-weight:500">${value}</span></div>`;
+
+              const section = (title: string, rows: string) =>
+                `<div style="padding:6px 10px;border-bottom:1px solid rgba(100,100,120,0.25)"><div style="font-weight:600;color:#d1d5db;margin-bottom:2px;font-size:11px;text-transform:uppercase;letter-spacing:0.5px">${title}</div>${rows}</div>`;
+
+              const pm1Val = object.pm10 ?? object.pm1 ?? 0;
+              const pm25Val = object.pm25 ?? 0;
+              const pm100Val = object.pm100 ?? 0;
+
+              const html = `<div>
+                <div style="padding:8px 10px;border-bottom:1px solid rgba(100,100,120,0.4);font-weight:700;font-size:13px;color:#fff">${object.sensorName || object.id}<span style="float:right;font-size:11px;font-weight:400;color:${object.status === 'active' ? '#34d399' : '#f87171'}">${object.status || 'unknown'}</span></div>
+                ${section('Particulate Matter', [
+                  row('PM 1.0', `${pm1Val} ug/m3`),
+                  row('PM 2.5', `${pm25Val} ug/m3`),
+                  row('PM 10', `${pm100Val} ug/m3`),
+                ].join(''))}
+                ${section('Radio', [
+                  row('RSSI', `${(object.electronics?.rxRssi ?? 0).toFixed(0)} dBm`),
+                  row('SNR', `${(object.electronics?.rxSnr ?? 0).toFixed(1)} dB`),
+                  row('Hop', `${object.electronics?.hopStart ?? 0}/${object.electronics?.hopLimit ?? 0}`),
+                ].join(''))}
+              </div>`;
+              return { html, style: tooltipStyle };
             }
+
+            if (object.layerType === 'smoke' || object.pm25 !== undefined || object.concentration !== undefined) {
+              const pm25 = object.pm25 ?? object.concentration ?? 0;
+              const pm10 = object.pm10 ?? pm25 * 1.3;
+              const pm1 = object.pm1 ?? pm25 * 0.7;
+              const html = `<div style="padding:8px 10px">
+                <div style="font-weight:700;margin-bottom:4px;color:#fff">Smoke</div>
+                <div style="display:flex;justify-content:space-between"><span style="color:#9ca3af">PM 2.5</span><span>${pm25.toFixed(1)} ug/m3</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:#9ca3af">PM 10</span><span>${pm10.toFixed(1)} ug/m3</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:#9ca3af">PM 1</span><span>${pm1.toFixed(1)} ug/m3</span></div>
+              </div>`;
+              return { html, style: tooltipStyle };
+            }
+
+            if (object.layerType === 'meteorological') {
+              const html = `<div style="padding:8px 10px">
+                <div style="font-weight:700;margin-bottom:4px;color:#fff">Meteorological</div>
+                <div style="display:flex;justify-content:space-between"><span style="color:#9ca3af">Temp</span><span>${(object.temperatureC ?? 0).toFixed(1)} C</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:#9ca3af">Humidity</span><span>${(object.humidityPct ?? 0).toFixed(1)}%</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:#9ca3af">Pressure</span><span>${(object.pressureHpa ?? 0).toFixed(0)} hPa</span></div>
+              </div>`;
+              return { html, style: tooltipStyle };
+            }
+
             return null;
           }}
         />
       </div>
 
-      {/* Compact Left Panel - Only Essential Controls */}
+      {/* Left Panel - Layer Controls */}
       {renderSettings.showControls && (
-        <div className="absolute top-4 left-4 z-10 space-y-2 max-w-48">
+        <div className="absolute top-4 left-4 z-10 space-y-2 max-w-52">
           {/* Camera Views */}
           <div className="bg-black/90 border border-gray-600 backdrop-blur-sm p-2 rounded">
-            <h3 className="text-xs text-white font-semibold mb-2">📷 View</h3>
+            <h3 className="text-xs text-white font-semibold mb-2">View</h3>
             <div className="grid grid-cols-2 gap-1">
               {cameraPresets.map((preset, idx) => (
                 <button
@@ -811,47 +794,99 @@ function SmokePlume3DViewerInternal({
                 onClick={togglePlay}
                 className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 flex-1"
               >
-                {isPlaying ? '⏸️' : '▶️'}
+                {isPlaying ? 'Pause' : 'Play'}
               </button>
               <button
                 onClick={resetView}
                 className="px-2 py-1 bg-gray-600 text-white text-xs rounded hover:bg-gray-700"
               >
-                🔄
+                Reset
               </button>
             </div>
           </div>
 
-          {/* Layer Toggles */}
+          {/* Data Layers */}
           <div className="bg-black/90 border border-gray-600 backdrop-blur-sm p-2 rounded">
-            <h3 className="text-xs text-white font-semibold mb-2">🗂️ Layers</h3>
-            <div className="space-y-1 text-xs">
-              {[
-                { key: 'showTerrain', label: '🏔️ Terrain', value: renderSettings.showTerrain },
-                { key: 'showSmoke', label: '🌪️ Smoke', value: renderSettings.showSmoke },
-                { key: 'showSensors', label: '📡 Sensors', value: renderSettings.showSensors },
-                { key: 'useEnhancedBlobPlumes', label: '🌊 Enhanced Blobs', value: renderSettings.useEnhancedBlobPlumes },
-                { key: 'useContinuousPlumes', label: '🌀 Continuous Plumes', value: renderSettings.useContinuousPlumes && !renderSettings.useEnhancedBlobPlumes },
-                { key: 'useRealisticPlumes', label: '💨 Wind Plumes', value: renderSettings.useRealisticPlumes && !renderSettings.useContinuousPlumes && !renderSettings.useEnhancedBlobPlumes },
-                { key: 'showDataPoints', label: '🔍 Debug', value: renderSettings.showDataPoints }
-              ].map(({ key, label, value }) => (
-                <label key={key} className="flex items-center justify-between text-gray-300 cursor-pointer">
-                  <span className="truncate">{label}</span>
+            <h3 className="text-xs text-white font-semibold mb-2">Layers</h3>
+            <div className="space-y-1.5 text-xs">
+              {/* Sensor Layer */}
+              <div>
+                <label className="flex items-center justify-between text-gray-300 cursor-pointer font-medium">
+                  <span>Sensors</span>
                   <input
                     type="checkbox"
-                    checked={value}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, [key]: e.target.checked }))}
+                    checked={renderSettings.showSensors}
+                    onChange={(e) => setRenderSettings(prev => ({ ...prev, showSensors: e.target.checked }))}
                     className="ml-2 scale-75"
                   />
                 </label>
-              ))}
+                <p className="text-gray-500 text-[10px] ml-1">Name, Status, PM, Electronics</p>
+              </div>
+
+              {/* Smoke Layer */}
+              <div>
+                <label className="flex items-center justify-between text-gray-300 cursor-pointer font-medium">
+                  <span>Smoke</span>
+                  <input
+                    type="checkbox"
+                    checked={renderSettings.showSmoke}
+                    onChange={(e) => setRenderSettings(prev => ({ ...prev, showSmoke: e.target.checked }))}
+                    className="ml-2 scale-75"
+                  />
+                </label>
+                <p className="text-gray-500 text-[10px] ml-1">PM 2.5, PM 10, PM 1</p>
+                {renderSettings.showSmoke && (
+                  <div className="ml-2 mt-1 space-y-0.5">
+                    {[
+                      { key: 'useEnhancedBlobPlumes', label: 'Enhanced Blobs', value: renderSettings.useEnhancedBlobPlumes },
+                      { key: 'useContinuousPlumes', label: 'Continuous', value: renderSettings.useContinuousPlumes && !renderSettings.useEnhancedBlobPlumes },
+                      { key: 'useRealisticPlumes', label: 'Wind-Aware', value: renderSettings.useRealisticPlumes && !renderSettings.useContinuousPlumes && !renderSettings.useEnhancedBlobPlumes },
+                    ].map(({ key, label, value }) => (
+                      <label key={key} className="flex items-center justify-between text-gray-400 cursor-pointer">
+                        <span className="truncate">{label}</span>
+                        <input
+                          type="checkbox"
+                          checked={value}
+                          onChange={(e) => setRenderSettings(prev => ({ ...prev, [key]: e.target.checked }))}
+                          className="ml-2 scale-75"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Meteorological Layer */}
+              <div>
+                <label className="flex items-center justify-between text-gray-300 cursor-pointer font-medium">
+                  <span>Meteorological</span>
+                  <input
+                    type="checkbox"
+                    checked={renderSettings.showMeteorology}
+                    onChange={(e) => setRenderSettings(prev => ({ ...prev, showMeteorology: e.target.checked }))}
+                    className="ml-2 scale-75"
+                  />
+                </label>
+                <p className="text-gray-500 text-[10px] ml-1">Temp, Humidity, Pressure</p>
+              </div>
+
+              {/* Terrain Layer */}
+              <label className="flex items-center justify-between text-gray-400 cursor-pointer">
+                <span>Terrain</span>
+                <input
+                  type="checkbox"
+                  checked={renderSettings.showTerrain}
+                  onChange={(e) => setRenderSettings(prev => ({ ...prev, showTerrain: e.target.checked }))}
+                  className="ml-2 scale-75"
+                />
+              </label>
             </div>
           </div>
         </div>
       )}
 
-      {/* Right Panel - Compact Status */}
-      <div className="absolute top-4 right-4 z-10 space-y-2 max-w-72">
+      {/* Right Panel - Status & Timeline */}
+      <div className="absolute top-12 right-4 z-10 space-y-2 max-w-72">
         {/* HYSPLIT Timeline */}
         <div className="bg-black/90 border border-gray-600 backdrop-blur-sm p-2 rounded">
           <div className="flex items-center justify-between mb-2">
@@ -869,22 +904,23 @@ function SmokePlume3DViewerInternal({
           {isTimelineActive && (
             <HysplitTimeline
               isActive={isTimelineActive}
-              onTimeChange={(hour) => {
-                setCurrentForecastHour(hour);
-                console.log(`Timeline: Hour ${hour}`);
-              }}
+              onTimeChange={(hour) => setCurrentForecastHour(hour)}
               className="min-w-64"
             />
           )}
         </div>
 
-        {/* Compact Status */}
+        {/* Status */}
         <div className="bg-black/90 border border-gray-600 backdrop-blur-sm p-2 rounded">
-          <h3 className="text-xs text-white font-semibold mb-1">📊 Status</h3>
+          <h3 className="text-xs text-white font-semibold mb-1">Status</h3>
           <div className="text-xs text-gray-300 space-y-0.5">
             <div className="flex justify-between">
-              <span>Points:</span>
+              <span>Data Points:</span>
               <span className="text-white">{concentrationData.length}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Sensors:</span>
+              <span className="text-green-400">{initialSensorData.length}</span>
             </div>
             <div className="flex justify-between">
               <span>Wind:</span>
@@ -892,337 +928,23 @@ function SmokePlume3DViewerInternal({
             </div>
             {dispersionStats && (
               <div className="flex justify-between">
-                <span>Max:</span>
+                <span>Max PM2.5:</span>
                 <span className="text-orange-400">{dispersionStats.maxConc.toFixed(1)} μg/m³</span>
               </div>
             )}
           </div>
         </div>
 
-        {/* Smoke Controls - Compact */}
-        <div className="bg-black/90 border border-gray-600 backdrop-blur-sm p-2 rounded">
-          <h3 className="text-xs text-white font-semibold mb-1">🌪️ Smoke</h3>
-          <div className="space-y-1">
-            {renderSettings.useEnhancedBlobPlumes ? (
-              // Enhanced blob plume controls
-              <>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Blob Length</span>
-                    <span>{(renderSettings.plumeLength / 1000).toFixed(1)}km</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="5000"
-                    max="25000"
-                    step="1000"
-                    value={renderSettings.plumeLength}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, plumeLength: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Blob Spread</span>
-                    <span>{(renderSettings.crossWindSpread / 1000).toFixed(1)}km</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="2000"
-                    max="15000"
-                    step="500"
-                    value={renderSettings.crossWindSpread}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, crossWindSpread: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Blob Resolution</span>
-                    <span>{renderSettings.gridResolution}m</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="20"
-                    max="200"
-                    step="10"
-                    value={renderSettings.gridResolution}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, gridResolution: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Blob Radius</span>
-                    <span>{(renderSettings.heatmapRadius / 1000).toFixed(1)}km</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="1000"
-                    max="8000"
-                    step="500"
-                    value={renderSettings.heatmapRadius}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, heatmapRadius: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Blob Intensity</span>
-                    <span>{renderSettings.heatmapIntensity.toFixed(1)}</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="1.0"
-                    max="8.0"
-                    step="0.5"
-                    value={renderSettings.heatmapIntensity}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, heatmapIntensity: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-              </>
-            ) : renderSettings.useContinuousPlumes ? (
-              // Continuous heatmap plume controls
-              <>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Plume Length</span>
-                    <span>{(renderSettings.plumeLength / 1000).toFixed(1)}km</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="3000"
-                    max="20000"
-                    step="500"
-                    value={renderSettings.plumeLength}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, plumeLength: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Cross-Wind Spread</span>
-                    <span>{(renderSettings.crossWindSpread / 1000).toFixed(1)}km</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="1000"
-                    max="10000"
-                    step="250"
-                    value={renderSettings.crossWindSpread}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, crossWindSpread: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Grid Resolution</span>
-                    <span>{renderSettings.gridResolution}m</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="50"
-                    max="300"
-                    step="25"
-                    value={renderSettings.gridResolution}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, gridResolution: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Heatmap Radius</span>
-                    <span>{(renderSettings.heatmapRadius / 1000).toFixed(1)}km</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="500"
-                    max="5000"
-                    step="250"
-                    value={renderSettings.heatmapRadius}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, heatmapRadius: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Intensity</span>
-                    <span>{renderSettings.heatmapIntensity.toFixed(1)}</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="1.0"
-                    max="5.0"
-                    step="0.2"
-                    value={renderSettings.heatmapIntensity}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, heatmapIntensity: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-              </>
-            ) : renderSettings.useRealisticPlumes ? (
-              // Wind-aware plume controls
-              <>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Plume Length</span>
-                    <span>{(renderSettings.plumeLength / 1000).toFixed(1)}km</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="2000"
-                    max="15000"
-                    step="500"
-                    value={renderSettings.plumeLength}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, plumeLength: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Cross-Wind Spread</span>
-                    <span>{(renderSettings.crossWindSpread / 1000).toFixed(1)}km</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="1000"
-                    max="8000"
-                    step="250"
-                    value={renderSettings.crossWindSpread}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, crossWindSpread: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-              </>
-            ) : (
-              // Legacy heatmap controls
-              <>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Radius</span>
-                    <span>{(renderSettings.heatmapRadius / 1000).toFixed(1)}km</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="1000"
-                    max="10000"
-                    step="500"
-                    value={renderSettings.heatmapRadius}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, heatmapRadius: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-300 flex justify-between">
-                    <span>Intensity</span>
-                    <span>{renderSettings.heatmapIntensity.toFixed(1)}</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="3.0"
-                    step="0.1"
-                    value={renderSettings.heatmapIntensity}
-                    onChange={(e) => setRenderSettings(prev => ({ ...prev, heatmapIntensity: parseFloat(e.target.value) }))}
-                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-              </>
-            )}
-            <div>
-              <label className="text-xs text-gray-300 flex justify-between">
-                <span>Threshold</span>
-                <span>{renderSettings.concentrationThreshold.toFixed(1)}μg/m³</span>
-              </label>
-              <input
-                type="range"
-                min="0.5"
-                max="20.0"
-                step="0.5"
-                value={renderSettings.concentrationThreshold}
-                onChange={(e) => setRenderSettings(prev => ({ ...prev, concentrationThreshold: parseFloat(e.target.value) }))}
-                className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-              />
-            </div>
-            {!isTimelineActive && (
-              <div>
-                <label className="text-xs text-gray-300 flex justify-between">
-                  <span>Time Window</span>
-                  <span>{Math.round(renderSettings.timeWindowMinutes / 60)}h</span>
-                </label>
-                <input
-                  type="range"
-                  min="60"
-                  max="720"
-                  step="60"
-                  value={renderSettings.timeWindowMinutes}
-                  onChange={(e) => setRenderSettings(prev => ({ ...prev, timeWindowMinutes: parseFloat(e.target.value) }))}
-                  className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Performance Controls */}
-        <div className="bg-black/90 border border-gray-600 backdrop-blur-sm p-2 rounded">
-          <h3 className="text-xs text-white font-semibold mb-1">⚡ Performance</h3>
-          <div className="space-y-1">
-            <div>
-              <label className="text-xs text-gray-300 flex justify-between">
-                <span>Mode</span>
-                <span className="text-cyan-400">{renderSettings.performanceMode}</span>
-              </label>
-              <select
-                value={renderSettings.performanceMode}
-                onChange={(e) => setRenderSettings(prev => ({ ...prev, performanceMode: e.target.value as any }))}
-                className="w-full text-xs bg-gray-700 text-white border border-gray-600 rounded px-1 py-0.5"
-              >
-                <option value="fast">Fast (Low detail)</option>
-                <option value="balanced">Balanced</option>
-                <option value="quality">Quality (High detail)</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-gray-300 flex justify-between">
-                <span>Max Points</span>
-                <span>{renderSettings.maxDataPoints}</span>
-              </label>
-              <input
-                type="range"
-                min="100"
-                max="3000"
-                step="100"
-                value={renderSettings.maxDataPoints}
-                onChange={(e) => setRenderSettings(prev => ({ ...prev, maxDataPoints: parseFloat(e.target.value) }))}
-                className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-              />
-            </div>
-            <div className="text-xs">
-              <label className="flex items-center justify-between text-gray-300 cursor-pointer">
-                <span>Enable LOD</span>
-                <input
-                  type="checkbox"
-                  checked={renderSettings.enableLOD}
-                  onChange={(e) => setRenderSettings(prev => ({ ...prev, enableLOD: e.target.checked }))}
-                  className="ml-2 scale-75"
-                />
-              </label>
-            </div>
-          </div>
-        </div>
-
-        {/* EPA AQI Legend - Compact */}
+        {/* AQI Legend */}
         <div className="bg-black/90 border border-gray-600 backdrop-blur-sm p-2 rounded">
           <h3 className="text-xs text-white font-semibold mb-1">AQI Scale</h3>
           <div className="space-y-0.5">
             {EPA_AQI_LEVELS.slice(0, 4).map((level, idx) => (
               <div key={idx} className="flex items-center gap-1 text-xs">
-                <div 
+                <div
                   className="w-2 h-2 rounded-full"
-                  style={{ 
-                    backgroundColor: `rgba(${level.color[0]}, ${level.color[1]}, ${level.color[2]}, 0.8)` 
+                  style={{
+                    backgroundColor: `rgba(${level.color[0]}, ${level.color[1]}, ${level.color[2]}, 0.8)`
                   }}
                 />
                 <span className="text-gray-300 text-xs truncate">{level.level}</span>
@@ -1232,12 +954,12 @@ function SmokePlume3DViewerInternal({
         </div>
       </div>
 
-      {/* Toggle Controls */}
+      {/* Toggle Controls Button - top right, above the right panel */}
       <button
         onClick={() => setRenderSettings(prev => ({ ...prev, showControls: !prev.showControls }))}
-        className="absolute top-4 right-4 z-10 bg-black/90 border border-gray-600 text-white p-2 rounded hover:bg-black"
+        className="absolute top-4 right-4 z-20 bg-black/90 border border-gray-600 text-white px-2 py-1 rounded text-xs hover:bg-black"
       >
-        {renderSettings.showControls ? '👁️' : '👁️‍🗨️'}
+        {renderSettings.showControls ? 'Hide Controls' : 'Show Controls'}
       </button>
     </div>
   );

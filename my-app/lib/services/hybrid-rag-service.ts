@@ -36,7 +36,10 @@ export class HybridRAGServiceClient {
   private timeout: number;
 
   constructor() {
-    this.baseUrl = process.env.HYBRID_RAG_SERVICE_URL || 'http://127.0.0.1:8000';
+    this.baseUrl =
+      process.env.HYBRID_RAG_SERVICE_URL ||
+      process.env.PYTHON_SERVICE_URL ||
+      'http://127.0.0.1:8000';
     this.timeout = 8000; // 8 second timeout for complex queries
   }
 

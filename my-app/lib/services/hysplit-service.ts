@@ -72,8 +72,10 @@ export class HysplitService {
   private readonly apiBaseUrl: string;
   
   constructor() {
-    // Updated to use unified server on port 8000
-    this.apiBaseUrl = process.env.HYSPLIT_SERVICE_URL || 'http://127.0.0.1:8000';
+    this.apiBaseUrl =
+      process.env.HYSPLIT_SERVICE_URL ||
+      process.env.PYTHON_SERVICE_URL ||
+      'http://127.0.0.1:8000';
   }
 
   /**
@@ -216,48 +218,26 @@ export class HysplitService {
       return result;
       
     } catch (error) {
-      console.log('⚠️ HYSPLIT: Python service unavailable, using fallback simulation data');
-      
-      // Mark run as completed with fallback data instead of failed
+      console.log('⚠️ HYSPLIT: Python service unavailable - real simulation unavailable');
+
+      // Mark run as failed instead of returning synthetic simulation output
       await supabase
         .from('hysplit_runs')
         .update({ 
-          status: 'completed', 
-          error_message: 'Using fallback simulation (Python service unavailable)',
+          status: 'failed', 
+          error_message: `Real HYSPLIT service unavailable: ${error instanceof Error ? error.message : 'unknown error'}`,
           completed_at: new Date().toISOString()
         })
         .eq('run_id', runId);
-        
-      // Provide realistic fallback HYSPLIT simulation results
+
       return {
-        status: 'completed',
+        status: 'failed',
         started_at: new Date().toISOString(),
-        execution_time: 45, // seconds
-        concentrations: [
-          {
-            timestamp: new Date(Date.now() + 3600000).toISOString(), // 1 hour from now
-            latitude: params.latitude + 0.01,
-            longitude: params.longitude + 0.02,
-            height: params.releaseHeight + 50,
-            concentration: 12.5 // μg/m³
-          },
-          {
-            timestamp: new Date(Date.now() + 3600000 * 2).toISOString(), // 2 hours from now  
-            latitude: params.latitude + 0.03,
-            longitude: params.longitude + 0.05,
-            height: params.releaseHeight + 100,
-            concentration: 8.7 // μg/m³
-          },
-          {
-            timestamp: new Date(Date.now() + 3600000 * 3).toISOString(), // 3 hours from now
-            latitude: params.latitude + 0.05,
-            longitude: params.longitude + 0.08,
-            height: params.releaseHeight + 150,
-            concentration: 5.2 // μg/m³
-          }
-        ],
-        output_files: ['fallback_trajectory.txt', 'fallback_concentration.txt'],
-        message: 'Fallback atmospheric dispersion simulation (Python service unavailable)'
+        execution_time: null,
+        concentrations: [],
+        output_files: [],
+        message: 'Real atmospheric dispersion simulation unavailable (HYSPLIT backend unreachable)',
+        error: error instanceof Error ? error.message : 'Unknown error'
       };
     }
   }

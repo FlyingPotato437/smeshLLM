@@ -114,7 +114,7 @@ export async function POST(request: NextRequest) {
 
     // Chunked Supabase insert
     const mappedRecords = records.map(r => {
-      const sensorId = r.sensor_id || r.from_node || r.from_short_name || 'csv-import';
+      const sensorId = r.sensor_id || r.from_node || r.fromNode || r.from_short_name || 'csv-import';
       
       // Handle elevation with units (e.g., "503 ft")
       let elevationValue = 0;
@@ -132,10 +132,13 @@ export async function POST(request: NextRequest) {
         elevationValue = parseFloat(r.altitude_m || r.altitude || 0);
       }
       
+      const latitude = parseFloat(r.latitude || r.lat || 37.4275);
+      const longitude = parseFloat(r.longitude || r.lng || r.lon || -122.1697);
+
       return {
         sensor_uuid: sensorIdToUUID(sensorId),
         ts: r.timestamp || r.datetime || new Date().toISOString(),
-        location: `${r.latitude || r.lat || 0},${r.longitude || r.lng || 0}`,
+        location: `${Number.isFinite(latitude) ? latitude : 37.4275},${Number.isFinite(longitude) ? longitude : -122.1697}`,
         altitude_m: elevationValue,
         pm25_ug_m3: parseFloat(r.pm25_ugm3 || r.pm25 || r.pm25Standard || r.pm25Environmental || 0),
         pm10_ug_m3: parseFloat(r.pm10_ugm3 || r.pm10 || r.pm10Standard || r.pm10Environmental || 0),

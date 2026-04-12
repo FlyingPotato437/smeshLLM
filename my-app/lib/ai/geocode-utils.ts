@@ -1,5 +1,6 @@
 // geocode-utils.ts
 import { PiSensorReading, FireDetection, MeteorologicalData, PlumePrediction } from '../../types';
+import { isLikelyLocationCandidate } from './location-heuristics';
 
 /**
  * Geocode location names to coordinates using Nominatim
@@ -10,6 +11,11 @@ export async function geocodeLocations(locations: string[], query: string): Prom
   for (const location of locations) {
     if (typeof location !== 'string') {
       console.log(`⚠️ Skipping non-string location: ${JSON.stringify(location)}`);
+      continue;
+    }
+
+    if (!isLikelyLocationCandidate(query, location)) {
+      console.log(`⚠️ Skipping low-confidence location candidate: ${location}`);
       continue;
     }
 

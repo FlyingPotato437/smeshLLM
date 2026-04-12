@@ -1,7 +1,13 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { isLikelyLocationCandidate } from './location-heuristics';
 
 // Initialize Gemini with your API key
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+const LOCATION_MODEL_CANDIDATES = [
+  process.env.GEMINI_LOCATION_MODEL,
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash',
+].filter(Boolean) as string[];
 
 const LOCATION_EXTRACTION_SYSTEM_PROMPT = `You are a precise location extraction assistant. 
 Extract location information from natural language queries about wildfires, air quality, or environmental conditions.
@@ -30,53 +36,73 @@ Query: "How's the smoke in Portland, OR?"
 `;
 
 export async function extractLocationFromQuery(query: string): Promise<{location: string | null; context: string}> {
-  try {
-    // Use correct Gemini model name for v1beta API
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
-    
-    const result = await model.generateContent({
-      contents: [
-        { role: 'user', parts: [{ text: query }] },
-        { 
-          role: 'model', 
-          parts: [{ 
-            text: 'Please extract the location from this query and return a JSON object with the location and context.'
-          }] 
-        }
-      ],
-      systemInstruction: {
-        role: 'system',
-        parts: [{ text: LOCATION_EXTRACTION_SYSTEM_PROMPT }]
-      },
-      generationConfig: {
-        temperature: 0.2,
-        maxOutputTokens: 200,
-      },
-    });
+  let lastError: unknown = null;
 
-    const response = await result.response;
-    const text = response.text();
-    
-    // Extract JSON from the response
+  for (const modelName of LOCATION_MODEL_CANDIDATES) {
     try {
-      // Using [\s\S] instead of /s flag for broader compatibility
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
+      const model = genAI.getGenerativeModel({ model: modelName });
+      
+      const result = await model.generateContent({
+        contents: [
+          { role: 'user', parts: [{ text: query }] },
+          { 
+            role: 'model', 
+            parts: [{ 
+              text: 'Please extract the location from this query and return a JSON object with the location and context.'
+            }] 
+          }
+        ],
+        systemInstruction: {
+          role: 'system',
+          parts: [{ text: LOCATION_EXTRACTION_SYSTEM_PROMPT }]
+        },
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 200,
+        },
+      });
+
+      const response = await result.response;
+      const text = response.text();
+      
+      // Extract JSON from the response
+      try {
+        // Using [\s\S] instead of /s flag for broader compatibility
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.location && !isLikelyLocationCandidate(query, parsed.location)) {
+            return {
+              location: null,
+              context: 'No trustworthy location could be identified in the query'
+            };
+          }
+          return parsed;
+        }
+      } catch (e) {
+        console.error('Error parsing location extraction response:', e);
       }
-    } catch (e) {
-      console.error('Error parsing location extraction response:', e);
+
+      return { location: null, context: 'Could not determine location' };
+    } catch (error) {
+      lastError = error;
+      console.warn(`Location extraction failed with model "${modelName}", trying next model...`);
     }
-    
-    return { location: null, context: 'Could not determine location' };
-  } catch (error) {
-    console.error('Error in extractLocationFromQuery:', error);
-    return { location: null, context: 'Error processing location' };
   }
+
+  if (lastError) {
+    console.error('Error in extractLocationFromQuery:', lastError);
+  }
+  return { location: null, context: 'Error processing location' };
 }
 
 // Fallback function that uses simple heuristics// Enhanced fallback location extractor with better patterns
 export function fallbackExtractLocation(query: string): { location: string | null; context: string } {
+  const ignoredTokens = new Set([
+    'is', 'are', 'what', 'where', 'when', 'how', 'the', 'this', 'that', 'there',
+    'smoke', 'fire', 'wildfire', 'air', 'quality', 'pm', 'around', 'near',
+  ]);
+
   // Enhanced regex patterns for location extraction
   const patterns = [
     // Patterns for city/region names
@@ -122,7 +148,13 @@ export function fallbackExtractLocation(query: string): { location: string | nul
     if (match) {
       try {
         const location = extract(match);
-        if (location && location.length > 1) { // Ensure we have a meaningful location
+        const normalizedLocation = location?.trim().toLowerCase();
+        if (
+          location &&
+          location.length > 2 &&
+          !ignoredTokens.has(normalizedLocation) &&
+          isLikelyLocationCandidate(cleanedQuery, location)
+        ) {
           return {
             location,
             context: 'Location extracted using enhanced fallback method'
@@ -144,6 +176,7 @@ export function fallbackExtractLocation(query: string): { location: string | nul
     'sea': 'Seattle',
     'den': 'Denver',
     'miami': 'Miami',
+    'stanford': 'Stanford, California',
     'me': 'your current location',
     'here': 'this location'
   };

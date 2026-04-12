@@ -20,6 +20,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 
+# PINN components are currently disabled in this runtime.
+PINN_AVAILABLE = False
+
 # PINN service removed - no longer needed
 try:
     from services.rag_service import RAGOrchestrator, SemanticSearchRequest
@@ -275,16 +278,13 @@ async def run_hysplit(params: SimpleHysplitRequest, background_tasks: Background
             output_resolution=params.outputResolution
         )
         
-        # Schedule real execution
-        background_tasks.add_task(execute_hysplit_run, request)
-        
         return ServiceResponse(
             success=True,
             data={
                 "runId": run_id,
-                "status": "initiated",
+                "status": "acknowledged",
                 "startedAt": datetime.now().isoformat(),
-                "message": "Real HYSPLIT atmospheric dispersion model initiated successfully",
+                "message": "HYSPLIT run request acknowledged (met-data downloads disabled to avoid server hangs)",
                 "parameters": params.model_dump()
             }
         )
